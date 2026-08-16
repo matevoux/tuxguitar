@@ -127,6 +127,8 @@ public class TGConfigKeys {
 	public static final String CONFIG_APP_VERSION = "config.app.version";
 
 	public static final String PLAY_WHEN_MOVING = "play.when.moving";
+	public static final String LEMO_LM_ENABLED = "lemo.lm.enabled";
+
 	public static final String CHORD_INSERT_DIAGRAM_ONLY = "chord.insert-diagram-only";
 
 	public static final String SCROLLING_MAX_FPS = "scrolling.continuous.maxFPS";

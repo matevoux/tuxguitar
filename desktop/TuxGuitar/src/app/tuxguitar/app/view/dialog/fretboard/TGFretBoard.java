@@ -79,6 +79,7 @@ public class TGFretBoard {
 	private UIButton settings;
 	private UIButton smaller;
 	private UIButton bigger;
+	private UIButton learningMode;
 	private UIImage fretBoard;
 	private TGBeat beat;
 	private TGBeat externalBeat;
@@ -108,6 +109,8 @@ public class TGFretBoard {
 
 		TuxGuitar.getInstance().getKeyBindingManager().appendListenersTo(this.toolComposite);
 		TuxGuitar.getInstance().getKeyBindingManager().appendListenersTo(this.fretBoardComposite);
+
+		this.initLearningMode();
 	}
 
 	public void createControlLayout() {
@@ -211,6 +214,20 @@ public class TGFretBoard {
 			}
 		});
 		this.createToolItemLayout(this.settings, ++column, UITableLayout.ALIGN_RIGHT, UITableLayout.ALIGN_FILL, false, false);
+
+		// learning mode
+		this.learningMode = uiFactory.createButton(this.toolComposite);
+		this.learningMode.setText("LM");
+		this.learningMode.setToolTipText(TuxGuitar.getProperty("learning.mode"));
+		this.learningMode.addSelectionListener(new UISelectionListener() {
+			public void onSelect(UISelectionEvent event) {
+				TGFretBoard.this.toggleLearningMode();
+			}
+		});
+		this.createToolItemLayout(this.learningMode, ++column, UITableLayout.ALIGN_RIGHT, UITableLayout.ALIGN_FILL, false, false);
+
+		// separator
+		this.createToolSeparator(uiFactory, ++column);
 
 		this.toolComposite.getLayout().set(goLeft, UITableLayout.MARGIN_LEFT, 0f);
 		this.toolComposite.getLayout().set(this.settings, UITableLayout.MARGIN_RIGHT, 0f);
@@ -656,6 +673,27 @@ public class TGFretBoard {
 		this.fretBoardComposite.redraw();
 	}
 
+	private void initLearningMode() {
+		boolean enabled = TuxGuitar.getInstance().getConfig().getBooleanValue(TGConfigKeys.LEMO_LM_ENABLED, false);
+		if (enabled) {
+			this.learningMode.setBgColor(getUIFactory().createColor(0, 255, 0));
+		} else {
+			this.learningMode.setBgColor(null);
+		}
+	}
+
+	private void toggleLearningMode() {
+		boolean current = TuxGuitar.getInstance().getConfig().getBooleanValue(TGConfigKeys.LEMO_LM_ENABLED, false);
+		boolean next = !current;
+		TuxGuitar.getInstance().getConfig().setValue(TGConfigKeys.LEMO_LM_ENABLED, Boolean.toString(next));
+		
+		if (next) {
+			this.learningMode.setBgColor(getUIFactory().createColor(0, 255, 0));
+		} else {
+			this.learningMode.setBgColor(null);
+		}
+	}
+
 	public boolean hasChanges(){
 		return this.changes;
 	}
@@ -714,6 +752,7 @@ public class TGFretBoard {
 		this.smaller.setToolTipText(TuxGuitar.getProperty("fretboard.smaller"));
 		this.bigger.setToolTipText(TuxGuitar.getProperty("fretboard.bigger"));
 		this.settings.setToolTipText(TuxGuitar.getProperty("settings"));
+		this.learningMode.setToolTipText(TuxGuitar.getProperty("learning.mode"));
 		this.scale.setText(TuxGuitar.getProperty("scale"));
 		this.loadScaleName();
 		this.setChanges(true);
