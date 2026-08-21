@@ -25,10 +25,12 @@ import app.tuxguitar.editor.action.note.TGChangeNoteAction;
 import app.tuxguitar.editor.action.note.TGDeleteNoteAction;
 import app.tuxguitar.player.base.MidiPlayer;
 import app.tuxguitar.song.models.TGBeat;
+import app.tuxguitar.song.models.TGDuration;
 import app.tuxguitar.song.models.TGMeasure;
 import app.tuxguitar.song.models.TGNote;
 import app.tuxguitar.song.models.TGScale;
 import app.tuxguitar.song.models.TGString;
+import app.tuxguitar.song.models.TGTimeSignature;
 import app.tuxguitar.song.models.TGTrack;
 import app.tuxguitar.song.models.TGVoice;
 import app.tuxguitar.ui.UIFactory;
@@ -495,6 +497,7 @@ public class TGFretBoard {
 		if(this.beat != null){
 			TGTrack track = getTrack();
 			int keySignature = this.beat.getMeasure().getKeySignature();
+			boolean learningMode = isLearningModeEnabled();
 
 			for(int v = 0; v < this.beat.countVoices(); v ++){
 				TGVoice voice = this.beat.getVoice( v );
@@ -510,7 +513,19 @@ public class TGFretBoard {
 						}
 						int y = this.strings[stringIndex];
 
-						if( (this.config.getStyle() & TGFretBoardConfig.DISPLAY_TEXT_NOTE) != 0 ){
+						if (learningMode) {
+							TGDuration unite = getLearningUnit(this.beat.getMeasure(), voice);
+							double ratio = (double) voice.getDuration().getPreciseTime() / (double) unite.getPreciseTime();
+							if( (this.config.getStyle() & TGFretBoardConfig.DISPLAY_TEXT_NOTE) != 0 ){
+								int realValue = track.getString(note.getString()).getValue() + note.getValue();
+								paintKeyText(painter,this.config.getColorNoteText(), this.config.getColorNote(), x, y, TGMusicKeyUtils.noteName(realValue, keySignature, note.isAltEnharmonic()), ratio);
+							} else {
+								int height = this.getOvalSize();
+								int width = Math.max(2, (int) Math.round(height * ratio));
+								paintLearningNote(painter, this.config.getColorNote(), x, y, width, height);
+							}
+						}
+						else if( (this.config.getStyle() & TGFretBoardConfig.DISPLAY_TEXT_NOTE) != 0 ){
 							int realValue = track.getString(note.getString()).getValue() + note.getValue();
 							paintKeyText(painter,this.config.getColorNoteText(), this.config.getColorNote(), x, y, TGMusicKeyUtils.noteName(realValue, keySignature, note.isAltEnharmonic()));
 						}
@@ -535,7 +550,21 @@ public class TGFretBoard {
 		painter.closePath();
 	}
 
+	private void paintLearningNote(UIPainter painter, UIColor background, int x, int y, int width, int height) {
+		painter.setBackground(background);
+		painter.initPath(UIPainter.PATH_FILL);
+		float w = width;
+		float h = height;
+		float radius = Math.min(w, h) / 2f;
+		painter.addRoundedRectangle(x - (w / 2f), y - (h / 2f), w, h, radius);
+		painter.closePath();
+	}
+
 	private void paintKeyText(UIPainter painter, UIColor foreground, UIColor background, int x, int y, String text) {
+		this.paintKeyText(painter, foreground, background, x, y, text, -1d);
+	}
+
+	private void paintKeyText(UIPainter painter, UIColor foreground, UIColor background, int x, int y, String text, double ratio) {
 		if (!getTrack().isPercussion()) {
 			painter.setBackground(background);
 			painter.setForeground(foreground);
@@ -545,7 +574,13 @@ public class TGFretBoard {
 			float fmHeight = painter.getFMHeight();
 			int ovalSize = (int)Math.max(fmWidth, fmHeight) + this.stringSpacing/10;
 			ovalSize = Math.min(ovalSize, this.getMaxOvalSize());
-			this.paintKeyOval(painter, background, x, y, ovalSize);
+			if (ratio >= 0d) {
+				int height = ovalSize;
+				int width = Math.max((int) Math.round(height * ratio), (int)fmWidth + this.stringSpacing/10);
+				paintLearningNote(painter, background, x, y, width, height);
+			} else {
+				this.paintKeyOval(painter, background, x, y, ovalSize);
+			}
 			painter.drawString(text, x - (fmWidth / 2f),y + painter.getFMMiddleLine());
 		}
 	}
@@ -692,6 +727,30 @@ public class TGFretBoard {
 		} else {
 			this.learningMode.setBgColor(null);
 		}
+		this.fretBoardComposite.redraw();
+	}
+
+	private boolean isLearningModeEnabled() {
+		return TuxGuitar.getInstance().getConfig().getBooleanValue(TGConfigKeys.LEMO_LM_ENABLED, false);
+	}
+
+	private boolean isTernaryRhythm(TGMeasure measure, TGVoice voice) {
+		TGTimeSignature timeSignature = measure.getTimeSignature();
+		int numerator = timeSignature.getNumerator();
+		if (numerator >= 6 && (numerator % 3) == 0) {
+			return true;
+		}
+		return voice.getDuration().getDivision().getEnters() == 3;
+	}
+
+	private TGDuration getLearningUnit(TGMeasure measure, TGVoice voice) {
+		TGDuration unite = TuxGuitar.getInstance().getSongManager().getFactory().newDuration();
+		unite.setValue(TGDuration.SIXTEENTH);
+		if (isTernaryRhythm(measure, voice)) {
+			unite.getDivision().setEnters(3);
+			unite.getDivision().setTimes(2);
+		}
+		return unite;
 	}
 
 	public boolean hasChanges(){
