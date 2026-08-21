@@ -515,7 +515,7 @@ public class TGFretBoard {
 
 						if (learningMode) {
 							TGDuration unite = getLearningUnit(this.beat.getMeasure(), voice);
-							double ratio = (double) voice.getDuration().getPreciseTime() / (double) unite.getPreciseTime();
+							double ratio = (double) getTiedPreciseDuration(note) / (double) unite.getPreciseTime();
 							if( (this.config.getStyle() & TGFretBoardConfig.DISPLAY_TEXT_NOTE) != 0 ){
 								int realValue = track.getString(note.getString()).getValue() + note.getValue();
 								paintKeyText(painter,this.config.getColorNoteText(), this.config.getColorNote(), x, y, TGMusicKeyUtils.noteName(realValue, keySignature, note.isAltEnharmonic()), ratio);
@@ -751,6 +751,48 @@ public class TGFretBoard {
 			unite.getDivision().setTimes(2);
 		}
 		return unite;
+	}
+
+
+	private boolean hasTechniqueEffect(TGNote note) {
+		return note.getEffect().isBend()
+			|| note.getEffect().isTremoloBar()
+			|| note.getEffect().isSlide()
+			|| note.getEffect().isHammer()
+			|| note.getEffect().isTrill()
+			|| note.getEffect().isTremoloPicking()
+			|| note.getEffect().isDeadNote()
+			|| note.getEffect().isGrace()
+			|| note.getEffect().isTapping();
+	}
+
+	private TGNote getTiedChainStart(TGNote note) {
+		TGNote start = note;
+		while (start.isTiedNote() && !hasTechniqueEffect(start)) {
+			TGNote previous = TuxGuitar.getInstance().getSongManager().getTrackManager().getPreviousNoteForTie(start);
+			if (previous == null || previous.getString() != start.getString() || previous.getValue() != start.getValue()) {
+				break;
+			}
+			if (hasTechniqueEffect(previous)) {
+				break;
+			}
+			start = previous;
+		}
+		return start;
+	}
+
+	private long getTiedPreciseDuration(TGNote note) {
+		TGNote current = getTiedChainStart(note);
+		long total = current.getVoice().getDuration().getPreciseTime();
+		while (true) {
+			TGNote next = TuxGuitar.getInstance().getSongManager().getTrackManager().getNextTiedNote(current);
+			if (next == null || hasTechniqueEffect(next)) {
+				break;
+			}
+			total += next.getVoice().getDuration().getPreciseTime();
+			current = next;
+		}
+		return total;
 	}
 
 	public boolean hasChanges(){
