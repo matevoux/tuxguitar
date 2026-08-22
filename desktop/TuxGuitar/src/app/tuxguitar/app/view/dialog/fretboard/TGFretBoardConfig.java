@@ -32,6 +32,7 @@ import app.tuxguitar.ui.widget.UIPanel;
 import app.tuxguitar.ui.widget.UISelectItem;
 import app.tuxguitar.ui.widget.UIWindow;
 import app.tuxguitar.util.TGContext;
+import app.tuxguitar.util.TGMusicKeyUtils;
 import app.tuxguitar.util.properties.TGProperties;
 
 public class TGFretBoardConfig {
@@ -44,6 +45,27 @@ public class TGFretBoardConfig {
 	public static final int DISPLAY_TEXT_SCALE = 0x02;
 	public static final int DIRECTION_RIGHT = 0;
 	public static final int DIRECTION_LEFT = 1;
+
+	private static final int LEARNING_VARIANT_NATURAL = 0;
+	private static final int LEARNING_VARIANT_SHARP = 1;
+	private static final int LEARNING_VARIANT_FLAT = 2;
+	private static final int LEARNING_VARIANT_COUNT = 3;
+
+	// Boomwhackers / educational rainbow for naturals, interpolated chromatics
+	private static final int[][] LEARNING_NOTE_RGB = new int[][] {
+		{ 229,  57,  53 }, // C
+		{ 244,  81,  30 }, // C# / Db
+		{ 251, 140,   0 }, // D
+		{ 249, 168,  37 }, // D# / Eb
+		{ 253, 216,  53 }, // E
+		{  67, 160,  71 }, // F
+		{   0, 137, 123 }, // F# / Gb
+		{   3, 155, 229 }, // G
+		{  92, 107, 192 }, // G# / Ab
+		{  57,  73, 171 }, // A
+		{ 194,  24,  91 }, // A# / Bb
+		{ 123,  31, 162 }  // B
+	};
 
 	private TGContext context;
 	private int style;
@@ -58,6 +80,8 @@ public class TGFretBoardConfig {
 	private UIColor colorNoteText;
 	private UIColor colorScaleText;
 	private UIColor colorTonicText;
+	private UIColor[][] learningNoteColors;
+	private UIColor[][] learningNoteTextColors;
 
 	public TGFretBoardConfig(TGContext context){
 		this.context = context;
@@ -107,6 +131,18 @@ public class TGFretBoardConfig {
 		return colorTonicText;
 	}
 
+	public UIColor getLearningNoteColor(int midiNote, int keySignature, boolean altEnharmonic) {
+		int pitch = positiveModulo(midiNote, LEARNING_NOTE_RGB.length);
+		int variant = getLearningColorVariant(midiNote, keySignature, altEnharmonic);
+		return this.learningNoteColors[pitch][variant];
+	}
+
+	public UIColor getLearningNoteTextColor(int midiNote, int keySignature, boolean altEnharmonic) {
+		int pitch = positiveModulo(midiNote, LEARNING_NOTE_RGB.length);
+		int variant = getLearningColorVariant(midiNote, keySignature, altEnharmonic);
+		return this.learningNoteTextColors[pitch][variant];
+	}
+
 	public int getDirection(){
 		return this.direction;
 	}
@@ -134,6 +170,7 @@ public class TGFretBoardConfig {
 		this.colorNoteText = createColor(factory, this.colorForeground(this.colorNote));
 		this.colorScaleText = createColor(factory, this.colorForeground(this.colorScale));
 		this.colorTonicText = createColor(factory, this.colorForeground(this.colorTonic));
+		this.loadLearningNoteColors(factory);
 	}
 
 	private UIColorModel colorForeground(UIColor colorBackground) {
@@ -142,6 +179,145 @@ public class TGFretBoardConfig {
 			return new UIColorModel(0x00, 0x00, 0x00);
 		}
 		return new UIColorModel(0xff, 0xff, 0xff);
+	}
+
+	private void loadLearningNoteColors(UIFactory factory) {
+		this.learningNoteColors = new UIColor[LEARNING_NOTE_RGB.length][LEARNING_VARIANT_COUNT];
+		this.learningNoteTextColors = new UIColor[LEARNING_NOTE_RGB.length][LEARNING_VARIANT_COUNT];
+		for (int pitch = 0; pitch < LEARNING_NOTE_RGB.length; pitch++) {
+			int[] base = LEARNING_NOTE_RGB[pitch];
+			int[][] variants = new int[][] {
+				adjustHsl(base[0], base[1], base[2], 1f, 1f),
+				adjustHsl(base[0], base[1], base[2], 0.45f, 0.72f),
+				adjustHsl(base[0], base[1], base[2], 1.1f, 1.25f)
+			};
+			for (int variant = 0; variant < LEARNING_VARIANT_COUNT; variant++) {
+				UIColor background = createColor(factory, new UIColorModel(variants[variant][0], variants[variant][1], variants[variant][2]));
+				this.learningNoteColors[pitch][variant] = background;
+				this.learningNoteTextColors[pitch][variant] = createColor(factory, this.colorForeground(background));
+			}
+		}
+	}
+
+	private void disposeLearningNoteColors() {
+		if (this.learningNoteColors != null) {
+			for (int pitch = 0; pitch < this.learningNoteColors.length; pitch++) {
+				for (int variant = 0; variant < this.learningNoteColors[pitch].length; variant++) {
+					this.learningNoteColors[pitch][variant].dispose();
+					this.learningNoteTextColors[pitch][variant].dispose();
+				}
+			}
+			this.learningNoteColors = null;
+			this.learningNoteTextColors = null;
+		}
+	}
+
+	private int getLearningColorVariant(int midiNote, int keySignature, boolean altEnharmonic) {
+		int ks = keySignature;
+		if (altEnharmonic) {
+			String normalName = TGMusicKeyUtils.noteName(midiNote, keySignature);
+			if (normalName != null) {
+				String sharpName = TGMusicKeyUtils.noteName(midiNote, 7);
+				if (sharpName != null && !sharpName.equals(normalName)) {
+					ks = 7;
+				} else {
+					ks = 14;
+				}
+			}
+		}
+		int alteration = TGMusicKeyUtils.noteAlteration(midiNote, ks);
+		if (alteration == TGMusicKeyUtils.SHARP) {
+			return LEARNING_VARIANT_SHARP;
+		}
+		if (alteration == TGMusicKeyUtils.FLAT) {
+			return LEARNING_VARIANT_FLAT;
+		}
+		return LEARNING_VARIANT_NATURAL;
+	}
+
+	private static int positiveModulo(int value, int modulo) {
+		int result = value % modulo;
+		return result < 0 ? result + modulo : result;
+	}
+
+	private static int[] adjustHsl(int red, int green, int blue, float saturationScale, float lightnessScale) {
+		float[] hsl = rgbToHsl(red, green, blue);
+		float saturation = clamp(hsl[1] * saturationScale, 0f, 1f);
+		float lightness = clamp(hsl[2] * lightnessScale, 0f, 0.88f);
+		return hslToRgb(hsl[0], saturation, lightness);
+	}
+
+	private static float clamp(float value, float min, float max) {
+		return Math.max(min, Math.min(max, value));
+	}
+
+	private static int clampChannel(int value) {
+		return Math.max(0, Math.min(255, value));
+	}
+
+	private static float[] rgbToHsl(int red, int green, int blue) {
+		float r = red / 255f;
+		float g = green / 255f;
+		float b = blue / 255f;
+		float max = Math.max(r, Math.max(g, b));
+		float min = Math.min(r, Math.min(g, b));
+		float lightness = (max + min) / 2f;
+		float saturation = 0f;
+		float hue = 0f;
+		if (max != min) {
+			float delta = max - min;
+			saturation = lightness > 0.5f ? delta / (2f - max - min) : delta / (max + min);
+			if (max == r) {
+				hue = (g - b) / delta + (g < b ? 6f : 0f);
+			} else if (max == g) {
+				hue = (b - r) / delta + 2f;
+			} else {
+				hue = (r - g) / delta + 4f;
+			}
+			hue *= 60f;
+		}
+		return new float[] { hue, saturation, lightness };
+	}
+
+	private static int[] hslToRgb(float hue, float saturation, float lightness) {
+		float h = hue / 360f;
+		float r;
+		float g;
+		float b;
+		if (saturation == 0f) {
+			r = g = b = lightness;
+		} else {
+			float q = lightness < 0.5f ? lightness * (1f + saturation) : lightness + saturation - lightness * saturation;
+			float p = 2f * lightness - q;
+			r = hueToRgb(p, q, h + 1f / 3f);
+			g = hueToRgb(p, q, h);
+			b = hueToRgb(p, q, h - 1f / 3f);
+		}
+		return new int[] {
+			clampChannel(Math.round(r * 255f)),
+			clampChannel(Math.round(g * 255f)),
+			clampChannel(Math.round(b * 255f))
+		};
+	}
+
+	private static float hueToRgb(float p, float q, float t) {
+		float hue = t;
+		if (hue < 0f) {
+			hue += 1f;
+		}
+		if (hue > 1f) {
+			hue -= 1f;
+		}
+		if (hue < 1f / 6f) {
+			return p + (q - p) * 6f * hue;
+		}
+		if (hue < 1f / 2f) {
+			return q;
+		}
+		if (hue < 2f / 3f) {
+			return p + (q - p) * (2f / 3f - hue) * 6f;
+		}
+		return p;
 	}
 
 	public void defaults(){
@@ -189,6 +365,7 @@ public class TGFretBoardConfig {
 		this.colorNoteText.dispose();
 		this.colorScaleText.dispose();
 		this.colorTonicText.dispose();
+		this.disposeLearningNoteColors();
 	}
 
 	public void configure(UIWindow parent, boolean isPercussion) {

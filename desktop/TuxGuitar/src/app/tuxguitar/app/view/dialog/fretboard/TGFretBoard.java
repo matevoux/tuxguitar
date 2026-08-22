@@ -516,13 +516,15 @@ public class TGFretBoard {
 						if (learningMode) {
 							TGDuration unite = getLearningUnit(this.beat.getMeasure(), voice);
 							double ratio = (double) getTiedPreciseDuration(note) / (double) unite.getPreciseTime();
-							if( (this.config.getStyle() & TGFretBoardConfig.DISPLAY_TEXT_NOTE) != 0 ){
-								int realValue = track.getString(note.getString()).getValue() + note.getValue();
-								paintKeyText(painter,this.config.getColorNoteText(), this.config.getColorNote(), x, y, TGMusicKeyUtils.noteName(realValue, keySignature, note.isAltEnharmonic()), ratio);
-							} else {
+							if (getTrack().isPercussion()) {
 								int height = this.getOvalSize();
 								int width = Math.max(2, (int) Math.round(height * ratio));
 								paintLearningNote(painter, this.config.getColorNote(), x, y, width, height);
+							} else {
+								int realValue = track.getString(note.getString()).getValue() + note.getValue();
+								UIColor noteColor = this.config.getLearningNoteColor(realValue, keySignature, note.isAltEnharmonic());
+								UIColor textColor = this.config.getLearningNoteTextColor(realValue, keySignature, note.isAltEnharmonic());
+								paintKeyText(painter, textColor, noteColor, x, y, String.valueOf(note.getValue()), ratio);
 							}
 						}
 						else if( (this.config.getStyle() & TGFretBoardConfig.DISPLAY_TEXT_NOTE) != 0 ){
