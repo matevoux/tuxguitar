@@ -66,6 +66,9 @@ public class TGFretBoard {
 	private static final int STRING_SPACING_MIN = 10;
 	private static final int STRING_SPACING_MAX = 60;
 	private static final int STRING_SPACING_INCREMENT = 2;
+	private static final int FRET_FROM_X = 10;
+	private static final int LEARNING_MARGIN_UNITS = 16;
+	private static final float LEARNING_MARGIN_MAX_RATIO = 0.35f;
 
 	private TGContext context;
 	private TGFretBoardConfig config;
@@ -514,17 +517,18 @@ public class TGFretBoard {
 						int y = this.strings[stringIndex];
 
 						if (learningMode) {
+							int anchorX = this.frets[this.frets.length - 1];
 							TGDuration unite = getLearningUnit(this.beat.getMeasure(), voice);
 							double ratio = (double) getTiedPreciseDuration(note) / (double) unite.getPreciseTime();
 							if (getTrack().isPercussion()) {
 								int height = this.getOvalSize();
 								int width = Math.max(2, (int) Math.round(height * ratio));
-								paintLearningNote(painter, this.config.getColorNote(), x, y, width, height);
+								paintLearningNote(painter, this.config.getColorNote(), anchorX, y, width, height);
 							} else {
 								int realValue = track.getString(note.getString()).getValue() + note.getValue();
 								UIColor noteColor = this.config.getLearningNoteColor(realValue, keySignature, note.isAltEnharmonic());
 								UIColor textColor = this.config.getLearningNoteTextColor(realValue, keySignature, note.isAltEnharmonic());
-								paintKeyText(painter, textColor, noteColor, x, y, String.valueOf(note.getValue()), ratio);
+								paintKeyText(painter, textColor, noteColor, anchorX, y, String.valueOf(note.getValue()), ratio);
 							}
 						}
 						else if( (this.config.getStyle() & TGFretBoardConfig.DISPLAY_TEXT_NOTE) != 0 ){
@@ -558,7 +562,8 @@ public class TGFretBoard {
 		float w = width;
 		float h = height;
 		float radius = Math.min(w, h) / 2f;
-		painter.addRoundedRectangle(x - (w / 2f), y - (h / 2f), w, h, radius);
+		float left = this.getLearningNoteLeft(x, w);
+		painter.addRoundedRectangle(left, y - (h / 2f), w, h, radius);
 		painter.closePath();
 	}
 
@@ -580,10 +585,12 @@ public class TGFretBoard {
 				int height = ovalSize;
 				int width = Math.max((int) Math.round(height * ratio), (int)fmWidth + this.stringSpacing/10);
 				paintLearningNote(painter, background, x, y, width, height);
+				float left = this.getLearningNoteLeft(x, width);
+				painter.drawString(text, left + (width / 2f) - (fmWidth / 2f), y + painter.getFMMiddleLine());
 			} else {
 				this.paintKeyOval(painter, background, x, y, ovalSize);
+				painter.drawString(text, x - (fmWidth / 2f),y + painter.getFMMiddleLine());
 			}
-			painter.drawString(text, x - (fmWidth / 2f),y + painter.getFMMiddleLine());
 		}
 	}
 
@@ -729,6 +736,7 @@ public class TGFretBoard {
 		} else {
 			this.learningMode.setBgColor(null);
 		}
+		this.setChanges(true);
 		this.fretBoardComposite.redraw();
 	}
 
@@ -892,10 +900,38 @@ public class TGFretBoard {
 
 	public void layout(float width){
 		this.disposeFretBoardImage();
-		this.calculateFretSpacing(width);
-		this.initFrets(10);
+		float margin = this.getLearningEndMargin(width);
+		float neckWidth = Math.max(width - margin, 1f);
+		this.calculateFretSpacing(neckWidth);
+		int fromX = FRET_FROM_X;
+		if (margin > 0f && this.isLeftHanded()) {
+			fromX += Math.round(margin);
+		}
+		this.initFrets(fromX);
 		this.initStrings(getStringCount());
 		this.setChanges(false);
+	}
+
+	private boolean isLeftHanded() {
+		return this.getDirection(this.config.getDirection()) == TGFretBoardConfig.DIRECTION_LEFT;
+	}
+
+	private float getLearningEndMargin(float width) {
+		if (!isLearningModeEnabled() || width <= 0f) {
+			return 0f;
+		}
+		int unit = Math.max(this.getOvalSize(), 8);
+		float margin = unit * LEARNING_MARGIN_UNITS;
+		float max = width * LEARNING_MARGIN_MAX_RATIO;
+		float min = unit * 4f;
+		if (min > max) {
+			return max;
+		}
+		return Math.max(min, Math.min(margin, max));
+	}
+
+	private float getLearningNoteLeft(float anchorX, float width) {
+		return this.isLeftHanded() ? (anchorX - width) : anchorX;
 	}
 
 	public void configure(){
