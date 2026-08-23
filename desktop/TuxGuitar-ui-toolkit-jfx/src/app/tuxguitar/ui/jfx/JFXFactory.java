@@ -129,7 +129,11 @@ public class JFXFactory implements UIFactory {
 	}
 
 	public UICanvas createCanvas(UIContainer parent, boolean bordered) {
-		return new JFXCanvas((JFXContainer<?>) parent, bordered);
+		return createCanvas(parent, bordered, false);
+	}
+
+	public UICanvas createCanvas(UIContainer parent, boolean bordered, boolean transparent) {
+		return new JFXCanvas((JFXContainer<?>) parent, bordered, transparent);
 	}
 
 	public UILabel createLabel(UIContainer parent) {

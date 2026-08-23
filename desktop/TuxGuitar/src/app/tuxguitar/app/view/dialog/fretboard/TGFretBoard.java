@@ -38,7 +38,9 @@ import app.tuxguitar.ui.event.UIMouseEvent;
 import app.tuxguitar.ui.event.UIMouseUpListener;
 import app.tuxguitar.ui.event.UISelectionEvent;
 import app.tuxguitar.ui.event.UISelectionListener;
+import app.tuxguitar.ui.layout.UIAbstractLayout;
 import app.tuxguitar.ui.layout.UITableLayout;
+import app.tuxguitar.ui.widget.UILayoutContainer;
 import app.tuxguitar.ui.resource.UIColor;
 import app.tuxguitar.ui.resource.UIImage;
 import app.tuxguitar.ui.resource.UIPainter;
@@ -74,6 +76,7 @@ public class TGFretBoard {
 	private TGFretBoardConfig config;
 	private UIPanel control;
 	private UIPanel toolComposite;
+	private UIPanel boardHost;
 	private UIImageView durationLabel;
 	private UILabel scaleName;
 	private UIButton scale;
@@ -88,8 +91,8 @@ public class TGFretBoard {
 	private UIImage fretBoard;
 	private TGBeat beat;
 	private TGBeat externalBeat;
-	private int[] frets;
-	private int[] strings;
+	private int[] frets = new int[0];
+	private int[] strings = new int[0];
 	private float fretSpacing;
 	private boolean changes;
 	private UISize lastSize;
@@ -98,6 +101,8 @@ public class TGFretBoard {
 	private int duration;
 	protected UIDropDownSelect<Integer> handSelector;
 	protected UICanvas fretBoardComposite;
+	protected UICanvas notesComposite;
+	private float notesLayerOffsetX;
 
 	public TGFretBoard(TGContext context, UIContainer parent) {
 		this.context = context;
@@ -114,6 +119,7 @@ public class TGFretBoard {
 
 		TuxGuitar.getInstance().getKeyBindingManager().appendListenersTo(this.toolComposite);
 		TuxGuitar.getInstance().getKeyBindingManager().appendListenersTo(this.fretBoardComposite);
+		TuxGuitar.getInstance().getKeyBindingManager().appendListenersTo(this.notesComposite);
 
 		this.initLearningMode();
 	}
@@ -121,7 +127,7 @@ public class TGFretBoard {
 	public void createControlLayout() {
 		UITableLayout uiLayout = new UITableLayout(0f);
 		uiLayout.set(this.toolComposite, 1, 1, UITableLayout.ALIGN_FILL, UITableLayout.ALIGN_FILL, true, false, 1, 1, null, null, 0f);
-		uiLayout.set(this.fretBoardComposite, 2, 1, UITableLayout.ALIGN_FILL, UITableLayout.ALIGN_FILL, true, true, 1, 1, null, null, 0f);
+		uiLayout.set(this.boardHost, 2, 1, UITableLayout.ALIGN_FILL, UITableLayout.ALIGN_FILL, true, true, 1, 1, null, null, 0f);
 
 		this.control.setLayout(uiLayout);
 	}
@@ -279,10 +285,19 @@ public class TGFretBoard {
 
 	private void initEditor() {
 		this.lastSize = new UISize();
-		this.fretBoardComposite = getUIFactory().createCanvas(this.control, false);
+		this.boardHost = getUIFactory().createPanel(this.control, false);
+		this.boardHost.setLayout(new OverlayLayout());
+
+		// Neck canvas kept only as geometry reference / future plane; not shown.
+		// Visible surface is notesComposite: blits neck cache + draws sprites (works on SWT/JFX/QT).
+		this.fretBoardComposite = getUIFactory().createCanvas(this.boardHost, false);
 		this.fretBoardComposite.setBgColor(this.config.getColorBackground());
-		this.fretBoardComposite.addMouseUpListener(new TGFretBoardMouseListener(this.context));
-		this.fretBoardComposite.addPaintListener(new TGBufferedPainterListenerLocked(this.context, new TGFretBoardPainterListener()));
+		this.fretBoardComposite.setVisible(false);
+
+		this.notesComposite = getUIFactory().createCanvas(this.boardHost, false, false);
+		this.notesComposite.setBgColor(this.config.getColorBackground());
+		this.notesComposite.addMouseUpListener(new TGFretBoardMouseListener(this.context));
+		this.notesComposite.addPaintListener(new TGBufferedPainterListenerLocked(this.context, new TGNotesPainterHandle()));
 	}
 
 	private void loadDurationImage(boolean force) {
@@ -367,36 +382,48 @@ public class TGFretBoard {
 				this.lastSize.setHeight(0);
 			}
 
-			UIRectangle childArea = this.control.getChildArea();
+			UIRectangle childArea = this.boardHost.getBounds();
 			float clientWidth = childArea.getWidth();
-			float clientHeight = childArea.getHeight();
+			if (clientWidth <= 0f) {
+				clientWidth = this.control.getChildArea().getWidth();
+			}
+			float clientHeight = this.control.getChildArea().getHeight();
 
 			if( this.lastSize.getWidth() != clientWidth || hasChanges() ){
+				this.lastSize.setWidth(clientWidth);
 				this.layout(clientWidth);
 			}
 
 			if( this.lastSize.getHeight() != clientHeight ) {
+				this.lastSize.setHeight(clientHeight);
 				TuxGuitar.getInstance().getFretBoardEditor().showFretBoard();
 			}
-			this.lastSize.setWidth(clientWidth);
-			this.lastSize.setHeight(clientHeight);
 			this.lastStringSpacing = this.stringSpacing;
 		}
 	}
 
 	private void paintFretBoard(UIPainter painter){
+		this.paintFretBoard(painter, 0f);
+	}
+
+	private void paintFretBoard(UIPainter painter, float offsetX){
 		if(this.fretBoard == null || this.fretBoard.isDisposed()){
 			UIFactory factory = getUIFactory();
-			UIRectangle area = this.control.getChildArea();
+			// Neck image uses the board host width (without LM overflow strip)
+			float neckWidth = this.boardHost.getBounds().getWidth();
+			if (neckWidth <= 0f) {
+				neckWidth = this.control.getChildArea().getWidth();
+			}
+			float neckHeight = (this.stringSpacing * Math.max(this.strings.length - 1, 0)) + TOP_SPACING + BOTTOM_SPACING;
 
-			this.fretBoard = factory.createImage(area.getWidth(), (this.stringSpacing * (this.strings.length - 1)) + TOP_SPACING + BOTTOM_SPACING);
+			this.fretBoard = factory.createImage(neckWidth, neckHeight);
 
 			UIPainter painterBuffer = this.fretBoard.createPainter();
 
 			//fondo
 			painterBuffer.setBackground(this.config.getColorBackground());
 			painterBuffer.initPath(UIPainter.PATH_FILL);
-			painterBuffer.addRectangle(area.getX(), area.getY(), area.getWidth(), area.getHeight());
+			painterBuffer.addRectangle(0, 0, neckWidth, neckHeight);
 			painterBuffer.closePath();
 
 
@@ -431,7 +458,7 @@ public class TGFretBoard {
 
 			painterBuffer.dispose();
 		}
-		painter.drawImage(this.fretBoard,0,0);
+		painter.drawImage(this.fretBoard, offsetX, 0);
 	}
 
 	private void paintFretPoints(UIPainter painter, int fretIndex) {
@@ -510,14 +537,14 @@ public class TGFretBoard {
 					int fretIndex = note.getValue();
 					int stringIndex = note.getString() - 1;
 					if (fretIndex >= 0 && fretIndex < this.frets.length && stringIndex >= 0 && stringIndex < this.strings.length) {
-						int x = this.frets[fretIndex];
+						int x = this.toNotesLayerX(this.frets[fretIndex]);
 						if (fretIndex > 0) {
-							x -= ((this.frets[fretIndex] - this.frets[fretIndex - 1]) / 2);
+							x = this.toNotesLayerX(this.frets[fretIndex] - ((this.frets[fretIndex] - this.frets[fretIndex - 1]) / 2));
 						}
 						int y = this.strings[stringIndex];
 
 						if (learningMode) {
-							int anchorX = this.frets[this.frets.length - 1];
+							int anchorX = this.toNotesLayerX(this.frets[this.frets.length - 1]);
 							TGDuration unite = getLearningUnit(this.beat.getMeasure(), voice);
 							double ratio = (double) getTiedPreciseDuration(note) / (double) unite.getPreciseTime();
 							if (getTrack().isPercussion()) {
@@ -594,10 +621,15 @@ public class TGFretBoard {
 		}
 	}
 
-	protected void paintEditor(UIPainter painter) {
+	private void paintSprites(UIPainter painter) {
 		this.updateEditor();
 		if (this.frets.length > 0 && this.strings.length > 0) {
-			paintFretBoard(painter);
+			UIRectangle notesBounds = this.notesComposite.getBounds();
+			painter.setBackground(this.config.getColorBackground());
+			painter.initPath(UIPainter.PATH_FILL);
+			painter.addRectangle(0, 0, Math.max(notesBounds.getWidth(), 1f), Math.max(notesBounds.getHeight(), 1f));
+			painter.closePath();
+			paintFretBoard(painter, this.notesLayerOffsetX);
 			paintNotes(painter);
 		}
 	}
@@ -712,9 +744,10 @@ public class TGFretBoard {
 
 	protected void updateDirection( int direction ){
 		this.config.saveDirection( this.getDirection(direction) );
-		this.initFrets(10);
+		this.initFrets(FRET_FROM_X);
 		this.setChanges(true);
-		this.fretBoardComposite.redraw();
+		this.layoutNotesOverlay();
+		this.notesComposite.redraw();
 	}
 
 	private void initLearningMode() {
@@ -736,8 +769,8 @@ public class TGFretBoard {
 		} else {
 			this.learningMode.setBgColor(null);
 		}
-		this.setChanges(true);
-		this.fretBoardComposite.redraw();
+		this.layoutNotesOverlay();
+		this.notesComposite.redraw();
 	}
 
 	private boolean isLearningModeEnabled() {
@@ -824,16 +857,16 @@ public class TGFretBoard {
 	public void redraw() {
 		if(!this.isDisposed()){
 			this.control.redraw();
-			this.fretBoardComposite.redraw();
+			this.notesComposite.redraw();
 			this.loadDurationImage(false);
 		}
 	}
 
 	public void redrawPlayingMode(){
 		if(!this.isDisposed()){
-			this.fretBoardComposite.redraw();
+			this.notesComposite.redraw();
 		}
-	 }
+	}
 
 	public void setVisible(boolean visible) {
 		this.control.setVisible(visible);
@@ -894,22 +927,23 @@ public class TGFretBoard {
 	}
 
 	public void computePackedSize() {
-		this.control.getLayout().set(this.fretBoardComposite, UITableLayout.PACKED_HEIGHT, Float.valueOf((this.stringSpacing * (this.strings.length - 1)) + TOP_SPACING + BOTTOM_SPACING));
+		this.control.getLayout().set(this.boardHost, UITableLayout.PACKED_HEIGHT, Float.valueOf((this.stringSpacing * (this.strings.length - 1)) + TOP_SPACING + BOTTOM_SPACING));
 		this.control.computePackedSize(null, null);
 	}
 
 	public void layout(float width){
 		this.disposeFretBoardImage();
-		float margin = this.getLearningEndMargin(width);
-		float neckWidth = Math.max(width - margin, 1f);
-		this.calculateFretSpacing(neckWidth);
-		int fromX = FRET_FROM_X;
-		if (margin > 0f && this.isLeftHanded()) {
-			fromX += Math.round(margin);
-		}
-		this.initFrets(fromX);
+		this.calculateFretSpacing(width);
+		this.initFrets(FRET_FROM_X);
 		this.initStrings(getStringCount());
+		this.layoutNotesOverlay();
 		this.setChanges(false);
+	}
+
+	private void layoutNotesOverlay() {
+		if (this.boardHost != null && !this.boardHost.isDisposed()) {
+			this.boardHost.layout();
+		}
 	}
 
 	private boolean isLeftHanded() {
@@ -934,6 +968,51 @@ public class TGFretBoard {
 		return this.isLeftHanded() ? (anchorX - width) : anchorX;
 	}
 
+	private int toNotesLayerX(int neckX) {
+		return Math.round(neckX + this.notesLayerOffsetX);
+	}
+
+	private class OverlayLayout extends UIAbstractLayout {
+
+		public UISize getComputedPackedSize(UILayoutContainer container) {
+			UISize size = new UISize();
+			for (UIControl child : container.getChildren()) {
+				UISize packed = this.getPreferredControlSize(child);
+				if (packed.getWidth() > size.getWidth()) {
+					size.setWidth(packed.getWidth());
+				}
+				if (packed.getHeight() > size.getHeight()) {
+					size.setHeight(packed.getHeight());
+				}
+			}
+			return size;
+		}
+
+		public void setBounds(UILayoutContainer container, UIRectangle bounds) {
+			float overflow = TGFretBoard.this.getLearningEndMargin(bounds.getWidth());
+			if (TGFretBoard.this.isLeftHanded()) {
+				TGFretBoard.this.notesLayerOffsetX = overflow;
+			} else {
+				TGFretBoard.this.notesLayerOffsetX = 0f;
+			}
+
+			UIRectangle neckBounds = new UIRectangle(bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight());
+			UIRectangle notesBounds = new UIRectangle(
+				bounds.getX() - TGFretBoard.this.notesLayerOffsetX,
+				bounds.getY(),
+				bounds.getWidth() + overflow,
+				bounds.getHeight()
+			);
+
+			if (TGFretBoard.this.fretBoardComposite != null) {
+				TGFretBoard.this.fretBoardComposite.setBounds(neckBounds);
+			}
+			if (TGFretBoard.this.notesComposite != null) {
+				TGFretBoard.this.notesComposite.setBounds(notesBounds);
+			}
+		}
+	}
+
 	public void configure(){
 		this.config.configure(TGWindow.getInstance(this.context).getWindow(), getTrack().isPercussion());
 	}
@@ -949,7 +1028,8 @@ public class TGFretBoard {
 	}
 
 	public UICanvas getFretBoardComposite(){
-		return this.fretBoardComposite;
+		// Visible interaction surface (notes / composite layer)
+		return this.notesComposite;
 	}
 
 	public UIFactory getUIFactory() {
@@ -965,13 +1045,13 @@ public class TGFretBoard {
 		}
 
 		public void onMouseUp(final UIMouseEvent event) {
-			getFretBoardComposite().setFocus();
+			TGFretBoard.this.notesComposite.setFocus();
 			if( event.getButton() == 1 ) {
 				if(!MidiPlayer.getInstance(this.context).isRunning()) {
 					TGEditorManager.getInstance(this.context).asyncRunLocked(new Runnable() {
 						public void run() {
 							if( getExternalBeat() == null ){
-								hit(event.getPosition().getX(), event.getPosition().getY());
+								hit(event.getPosition().getX() - TGFretBoard.this.notesLayerOffsetX, event.getPosition().getY());
 							}else{
 								setExternalBeat( null );
 								TuxGuitar.getInstance().updateCache(true);
@@ -985,18 +1065,14 @@ public class TGFretBoard {
 		}
 	}
 
-	private class TGFretBoardPainterListener implements TGBufferedPainterHandle {
-
-		public TGFretBoardPainterListener(){
-			super();
-		}
+	private class TGNotesPainterHandle implements TGBufferedPainterHandle {
 
 		public void paintControl(UIPainter painter) {
-			TGFretBoard.this.paintEditor(painter);
+			TGFretBoard.this.paintSprites(painter);
 		}
 
 		public UICanvas getPaintableControl() {
-			return TGFretBoard.this.fretBoardComposite;
+			return TGFretBoard.this.notesComposite;
 		}
 	}
 }

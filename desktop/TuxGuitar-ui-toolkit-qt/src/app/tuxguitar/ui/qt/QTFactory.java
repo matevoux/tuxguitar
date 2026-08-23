@@ -129,7 +129,11 @@ public class QTFactory implements UIFactory {
 	}
 
 	public UICanvas createCanvas(UIContainer parent, boolean bordered) {
-		return new QTCanvas((QTContainer) parent, bordered);
+		return createCanvas(parent, bordered, false);
+	}
+
+	public UICanvas createCanvas(UIContainer parent, boolean bordered, boolean transparent) {
+		return new QTCanvas((QTContainer) parent, bordered, transparent);
 	}
 
 	public UILabel createLabel(UIContainer parent) {

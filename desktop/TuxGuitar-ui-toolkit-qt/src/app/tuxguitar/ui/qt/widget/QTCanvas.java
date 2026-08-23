@@ -14,10 +14,14 @@ public class QTCanvas extends QTWidget<QFrame> implements UICanvas {
 	private QTPaintListenerManager paintListener;
 
 	public QTCanvas(QTContainer parent, boolean bordered) {
+		this(parent, bordered, false);
+	}
+
+	public QTCanvas(QTContainer parent, boolean bordered, boolean transparent) {
 		super(new QFrame(parent.getContainerControl()), parent);
 
 		this.paintListener = new QTPaintListenerManager(this);
-		this.getControl().setAutoFillBackground(true);
+		this.getControl().setAutoFillBackground(!transparent);
 		this.getControl().setFrameShape(bordered ? Shape.StyledPanel : Shape.NoFrame);
 	}
 

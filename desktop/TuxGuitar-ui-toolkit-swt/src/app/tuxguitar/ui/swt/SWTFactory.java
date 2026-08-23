@@ -139,7 +139,12 @@ public class SWTFactory implements UIFactory {
 
 	@SuppressWarnings("unchecked")
 	public UICanvas createCanvas(UIContainer parent, boolean bordered) {
-		return new SWTCanvas((SWTContainer<Composite>) parent, bordered);
+		return createCanvas(parent, bordered, false);
+	}
+
+	@SuppressWarnings("unchecked")
+	public UICanvas createCanvas(UIContainer parent, boolean bordered, boolean transparent) {
+		return new SWTCanvas((SWTContainer<Composite>) parent, bordered, transparent);
 	}
 
 	@SuppressWarnings("unchecked")

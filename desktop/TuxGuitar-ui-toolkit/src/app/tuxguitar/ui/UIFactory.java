@@ -67,6 +67,8 @@ public interface UIFactory extends UIResourceFactory {
 
 	UICanvas createCanvas(UIContainer parent, boolean bordered);
 
+	UICanvas createCanvas(UIContainer parent, boolean bordered, boolean transparent);
+
 	UILabel createLabel(UIContainer parent);
 
 	UIWrapLabel createWrapLabel(UIContainer parent);

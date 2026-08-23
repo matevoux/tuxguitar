@@ -22,6 +22,10 @@ public class JFXCanvas extends JFXNode<Canvas> implements UICanvas {
 	private Tooltip tooltip;
 
 	public JFXCanvas(JFXContainer<? extends Region> parent, boolean bordered) {
+		this(parent, bordered, false);
+	}
+
+	public JFXCanvas(JFXContainer<? extends Region> parent, boolean bordered, boolean transparent) {
 		super(new Canvas(), parent);
 		this.paintListener = new JFXPaintListenerManagerAsync(this);
 		this.resizeListener = new JFXResizeListenerManager(this);
