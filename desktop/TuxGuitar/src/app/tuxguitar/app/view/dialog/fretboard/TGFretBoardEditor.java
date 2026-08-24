@@ -133,6 +133,8 @@ public class TGFretBoardEditor implements TGEventListener{
 			this.redraw();
 		}else if( type == TGRedrawEvent.PLAYING_NEW_BEAT ){
 			this.redrawPlayingMode();
+		}else if( type == TGRedrawEvent.PLAYING_THREAD && this.isVisible() && getFretBoard().isLearningModeEnabled() ){
+			this.redrawPlayingMode();
 		}
 	}
 

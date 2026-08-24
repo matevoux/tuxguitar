@@ -1,6 +1,8 @@
 package app.tuxguitar.app.view.dialog.fretboard;
 
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 
 import app.tuxguitar.app.TuxGuitar;
 import app.tuxguitar.app.action.TGActionProcessorListener;
@@ -30,7 +32,6 @@ import app.tuxguitar.song.models.TGMeasure;
 import app.tuxguitar.song.models.TGNote;
 import app.tuxguitar.song.models.TGScale;
 import app.tuxguitar.song.models.TGString;
-import app.tuxguitar.song.models.TGTimeSignature;
 import app.tuxguitar.song.models.TGTrack;
 import app.tuxguitar.song.models.TGVoice;
 import app.tuxguitar.ui.UIFactory;
@@ -103,11 +104,17 @@ public class TGFretBoard {
 	protected UICanvas fretBoardComposite;
 	protected UICanvas notesComposite;
 	private float notesLayerOffsetX;
+	private List<LearningSprite> learningSprites;
+	private long learningLastPlayPrecise;
+	private long learningLastStampedPrecise;
+	private int learningTrackNumber;
 
 	public TGFretBoard(TGContext context, UIContainer parent) {
 		this.context = context;
 		this.config = new TGFretBoardConfig(context);
 		this.config.load();
+		this.learningSprites = new ArrayList<LearningSprite>();
+		this.resetLearningLayer();
 		this.stringSpacing = TuxGuitar.getInstance().getConfig().getIntegerValue(TGConfigKeys.FRETBOARD_STRING_SPACING);
 		this.control = getUIFactory().createPanel(parent, false);
 
@@ -527,7 +534,6 @@ public class TGFretBoard {
 		if(this.beat != null){
 			TGTrack track = getTrack();
 			int keySignature = this.beat.getMeasure().getKeySignature();
-			boolean learningMode = isLearningModeEnabled();
 
 			for(int v = 0; v < this.beat.countVoices(); v ++){
 				TGVoice voice = this.beat.getVoice( v );
@@ -543,22 +549,7 @@ public class TGFretBoard {
 						}
 						int y = this.strings[stringIndex];
 
-						if (learningMode) {
-							int anchorX = this.toNotesLayerX(this.frets[this.frets.length - 1]);
-							TGDuration unite = getLearningUnit(this.beat.getMeasure(), voice);
-							double ratio = (double) getTiedPreciseDuration(note) / (double) unite.getPreciseTime();
-							if (getTrack().isPercussion()) {
-								int height = this.getOvalSize();
-								int width = Math.max(2, (int) Math.round(height * ratio));
-								paintLearningNote(painter, this.config.getColorNote(), anchorX, y, width, height);
-							} else {
-								int realValue = track.getString(note.getString()).getValue() + note.getValue();
-								UIColor noteColor = this.config.getLearningNoteColor(realValue, keySignature, note.isAltEnharmonic());
-								UIColor textColor = this.config.getLearningNoteTextColor(realValue, keySignature, note.isAltEnharmonic());
-								paintKeyText(painter, textColor, noteColor, anchorX, y, String.valueOf(note.getValue()), ratio);
-							}
-						}
-						else if( (this.config.getStyle() & TGFretBoardConfig.DISPLAY_TEXT_NOTE) != 0 ){
+						if( (this.config.getStyle() & TGFretBoardConfig.DISPLAY_TEXT_NOTE) != 0 ){
 							int realValue = track.getString(note.getString()).getValue() + note.getValue();
 							paintKeyText(painter,this.config.getColorNoteText(), this.config.getColorNote(), x, y, TGMusicKeyUtils.noteName(realValue, keySignature, note.isAltEnharmonic()));
 						}
@@ -595,10 +586,6 @@ public class TGFretBoard {
 	}
 
 	private void paintKeyText(UIPainter painter, UIColor foreground, UIColor background, int x, int y, String text) {
-		this.paintKeyText(painter, foreground, background, x, y, text, -1d);
-	}
-
-	private void paintKeyText(UIPainter painter, UIColor foreground, UIColor background, int x, int y, String text, double ratio) {
 		if (!getTrack().isPercussion()) {
 			painter.setBackground(background);
 			painter.setForeground(foreground);
@@ -608,17 +595,24 @@ public class TGFretBoard {
 			float fmHeight = painter.getFMHeight();
 			int ovalSize = (int)Math.max(fmWidth, fmHeight) + this.stringSpacing/10;
 			ovalSize = Math.min(ovalSize, this.getMaxOvalSize());
-			if (ratio >= 0d) {
-				int height = ovalSize;
-				int width = Math.max((int) Math.round(height * ratio), (int)fmWidth + this.stringSpacing/10);
-				paintLearningNote(painter, background, x, y, width, height);
-				float left = this.getLearningNoteLeft(x, width);
-				painter.drawString(text, left + (width / 2f) - (fmWidth / 2f), y + painter.getFMMiddleLine());
-			} else {
-				this.paintKeyOval(painter, background, x, y, ovalSize);
-				painter.drawString(text, x - (fmWidth / 2f),y + painter.getFMMiddleLine());
-			}
+			this.paintKeyOval(painter, background, x, y, ovalSize);
+			painter.drawString(text, x - (fmWidth / 2f),y + painter.getFMMiddleLine());
 		}
+	}
+
+	private void paintLearningNoteText(UIPainter painter, UIColor foreground, UIColor background, int x, int y, String text, int width) {
+		painter.setBackground(background);
+		painter.setForeground(foreground);
+		painter.setFont(this.config.getFont());
+
+		float fmWidth = painter.getFMWidth(text);
+		float fmHeight = painter.getFMHeight();
+		int height = (int)Math.max(fmWidth, fmHeight) + this.stringSpacing/10;
+		height = Math.min(height, this.getMaxOvalSize());
+		width = Math.max(width, 2);
+		paintLearningNote(painter, background, x, y, width, height);
+		float left = this.getLearningNoteLeft(x, width);
+		painter.drawString(text, left + (width / 2f) - (fmWidth / 2f), y + painter.getFMMiddleLine());
 	}
 
 	private void paintSprites(UIPainter painter) {
@@ -630,7 +624,12 @@ public class TGFretBoard {
 			painter.addRectangle(0, 0, Math.max(notesBounds.getWidth(), 1f), Math.max(notesBounds.getHeight(), 1f));
 			painter.closePath();
 			paintFretBoard(painter, this.notesLayerOffsetX);
-			paintNotes(painter);
+			if (isLearningModeEnabled()) {
+				this.updateLearningLayer();
+				this.paintLearningSprites(painter);
+			} else {
+				paintNotes(painter);
+			}
 		}
 	}
 
@@ -746,6 +745,7 @@ public class TGFretBoard {
 		this.config.saveDirection( this.getDirection(direction) );
 		this.initFrets(FRET_FROM_X);
 		this.setChanges(true);
+		this.resetLearningLayer();
 		this.layoutNotesOverlay();
 		this.notesComposite.redraw();
 	}
@@ -769,31 +769,228 @@ public class TGFretBoard {
 		} else {
 			this.learningMode.setBgColor(null);
 		}
+		this.resetLearningLayer();
 		this.layoutNotesOverlay();
 		this.notesComposite.redraw();
 	}
 
-	private boolean isLearningModeEnabled() {
+	public boolean isLearningModeEnabled() {
 		return TuxGuitar.getInstance().getConfig().getBooleanValue(TGConfigKeys.LEMO_LM_ENABLED, false);
 	}
 
-	private boolean isTernaryRhythm(TGMeasure measure, TGVoice voice) {
-		TGTimeSignature timeSignature = measure.getTimeSignature();
-		int numerator = timeSignature.getNumerator();
-		if (numerator >= 6 && (numerator % 3) == 0) {
-			return true;
+	private void resetLearningLayer() {
+		if (this.learningSprites != null) {
+			this.learningSprites.clear();
 		}
-		return voice.getDuration().getDivision().getEnters() == 3;
+		this.learningLastPlayPrecise = Long.MIN_VALUE;
+		this.learningLastStampedPrecise = Long.MIN_VALUE;
+		this.learningTrackNumber = -1;
 	}
 
-	private TGDuration getLearningUnit(TGMeasure measure, TGVoice voice) {
-		TGDuration unite = TuxGuitar.getInstance().getSongManager().getFactory().newDuration();
-		unite.setValue(TGDuration.SIXTEENTH);
-		if (isTernaryRhythm(measure, voice)) {
-			unite.getDivision().setEnters(3);
-			unite.getDivision().setTimes(2);
+	private long getPlayPreciseTime() {
+		MidiPlayer player = MidiPlayer.getInstance(this.context);
+		if (player.isRunning()) {
+			return TGDuration.toPreciseTime(TGTransport.getInstance(this.context).getCache().getPlayStart());
 		}
-		return unite;
+		if (this.beat != null) {
+			return this.beatPreciseStart(this.beat);
+		}
+		return 0L;
+	}
+
+	private long beatPreciseStart(TGBeat beat) {
+		Long preciseStart = beat.getPreciseStart();
+		if (preciseStart != null && preciseStart.longValue() >= 0L) {
+			return preciseStart.longValue();
+		}
+		return TGDuration.toPreciseTime(beat.getStart());
+	}
+
+	private float getLearningUnitWidth() {
+		return Math.max(this.getOvalSize(), 8);
+	}
+
+	private float getPixelsPerPreciseTime() {
+		long unitPrecise = TGDuration.WHOLE_PRECISE_DURATION / TGDuration.SIXTEENTH;
+		if (unitPrecise <= 0L) {
+			return 0f;
+		}
+		return this.getLearningUnitWidth() / (float) unitPrecise;
+	}
+
+	private int getLearningAnchorX() {
+		if (this.frets.length == 0) {
+			return 0;
+		}
+		return this.toNotesLayerX(this.frets[this.frets.length - 1]);
+	}
+
+	private int toLearningX(long notePreciseStart, long playPrecise) {
+		float dir = this.isLeftHanded() ? -1f : 1f;
+		return Math.round(this.getLearningAnchorX() + dir * (notePreciseStart - playPrecise) * this.getPixelsPerPreciseTime());
+	}
+
+	private int toLearningWidth(long preciseStart, long preciseDuration, long playPrecise) {
+		int startX = this.toLearningX(preciseStart, playPrecise);
+		int endX = this.toLearningX(preciseStart + preciseDuration, playPrecise);
+		return Math.max(2, Math.abs(endX - startX));
+	}
+
+	private void updateLearningLayer() {
+		long playPrecise = this.getPlayPreciseTime();
+		TGTrack track = this.getTrack();
+		int trackNumber = (track != null ? track.getNumber() : -1);
+
+		boolean reset = this.learningLastPlayPrecise == Long.MIN_VALUE
+			|| trackNumber != this.learningTrackNumber
+			|| playPrecise < this.learningLastPlayPrecise
+			|| (playPrecise - this.learningLastPlayPrecise) > TGDuration.WHOLE_PRECISE_DURATION;
+
+		if (reset) {
+			this.learningSprites.clear();
+			this.stampLearningBeat(this.beat);
+			if (this.beat != null) {
+				this.learningLastStampedPrecise = this.beatPreciseStart(this.beat);
+			} else {
+				this.learningLastStampedPrecise = playPrecise;
+			}
+		} else if (playPrecise > this.learningLastStampedPrecise) {
+			this.stampLearningNotesBetween(this.learningLastStampedPrecise, playPrecise);
+			this.learningLastStampedPrecise = playPrecise;
+		}
+
+		this.cullLearningSprites(playPrecise);
+		this.learningLastPlayPrecise = playPrecise;
+		this.learningTrackNumber = trackNumber;
+	}
+
+	private void stampLearningNotesBetween(long fromExclusive, long toInclusive) {
+		TGTrack track = this.getTrack();
+		if (track == null) {
+			return;
+		}
+		for (int i = 0; i < track.countMeasures(); i++) {
+			TGMeasure measure = track.getMeasure(i);
+			long measureStart = measure.getPreciseStart();
+			long measureEnd = measureStart + measure.getPreciseLength();
+			if (measureEnd <= fromExclusive || measureStart > toInclusive) {
+				continue;
+			}
+			List<TGBeat> beats = measure.getBeats();
+			for (int b = 0; b < beats.size(); b++) {
+				TGBeat beat = beats.get(b);
+				long start = this.beatPreciseStart(beat);
+				if (start > fromExclusive && start <= toInclusive) {
+					this.stampLearningBeat(beat);
+				}
+			}
+		}
+	}
+
+	private void stampLearningBeat(TGBeat beat) {
+		if (beat == null || beat.getMeasure() == null) {
+			return;
+		}
+		TGTrack track = beat.getMeasure().getTrack();
+		if (track == null) {
+			track = this.getTrack();
+		}
+		if (track == null) {
+			return;
+		}
+		int keySignature = beat.getMeasure().getKeySignature();
+		boolean percussion = track.isPercussion();
+		for (int v = 0; v < beat.countVoices(); v++) {
+			TGVoice voice = beat.getVoice(v);
+			if (voice == null || voice.isEmpty() || voice.isRestVoice()) {
+				continue;
+			}
+			Iterator<TGNote> it = voice.getNotes().iterator();
+			while (it.hasNext()) {
+				this.stampLearningNote(it.next(), track, keySignature, percussion);
+			}
+		}
+	}
+
+	private void stampLearningNote(TGNote note, TGTrack track, int keySignature, boolean percussion) {
+		TGNote chainStart = this.getTiedChainStart(note);
+		if (chainStart.getVoice() == null || chainStart.getVoice().getBeat() == null) {
+			return;
+		}
+		TGBeat startBeat = chainStart.getVoice().getBeat();
+		long preciseStart = this.beatPreciseStart(startBeat);
+		int fretIndex = chainStart.getValue();
+		int stringIndex = chainStart.getString() - 1;
+		if (fretIndex < 0 || fretIndex >= this.frets.length || stringIndex < 0 || stringIndex >= this.strings.length) {
+			return;
+		}
+		if (this.isLearningSpriteStamped(preciseStart, stringIndex, fretIndex)) {
+			return;
+		}
+
+		LearningSprite sprite = new LearningSprite();
+		sprite.preciseStart = preciseStart;
+		sprite.preciseDuration = this.getTiedPreciseDuration(chainStart);
+		sprite.stringIndex = stringIndex;
+		sprite.fret = fretIndex;
+		sprite.keySignature = keySignature;
+		sprite.altEnharmonic = chainStart.isAltEnharmonic();
+		sprite.percussion = percussion;
+		if (!percussion) {
+			sprite.midiNote = track.getString(chainStart.getString()).getValue() + chainStart.getValue();
+		}
+		this.learningSprites.add(sprite);
+	}
+
+	private boolean isLearningSpriteStamped(long preciseStart, int stringIndex, int fret) {
+		for (int i = 0; i < this.learningSprites.size(); i++) {
+			LearningSprite sprite = this.learningSprites.get(i);
+			if (sprite.preciseStart == preciseStart && sprite.stringIndex == stringIndex && sprite.fret == fret) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private void cullLearningSprites(long playPrecise) {
+		if (this.notesComposite == null) {
+			return;
+		}
+		float canvasWidth = this.notesComposite.getBounds().getWidth();
+		if (canvasWidth <= 0f) {
+			return;
+		}
+		Iterator<LearningSprite> it = this.learningSprites.iterator();
+		while (it.hasNext()) {
+			LearningSprite sprite = it.next();
+			int x = this.toLearningX(sprite.preciseStart, playPrecise);
+			int width = this.toLearningWidth(sprite.preciseStart, sprite.preciseDuration, playPrecise);
+			float left = this.getLearningNoteLeft(x, width);
+			if (left + width < 0f || left > canvasWidth) {
+				it.remove();
+			}
+		}
+	}
+
+	private void paintLearningSprites(UIPainter painter) {
+		long playPrecise = this.getPlayPreciseTime();
+		for (int i = 0; i < this.learningSprites.size(); i++) {
+			LearningSprite sprite = this.learningSprites.get(i);
+			if (sprite.stringIndex < 0 || sprite.stringIndex >= this.strings.length) {
+				continue;
+			}
+			int x = this.toLearningX(sprite.preciseStart, playPrecise);
+			int width = this.toLearningWidth(sprite.preciseStart, sprite.preciseDuration, playPrecise);
+			int y = this.strings[sprite.stringIndex];
+			if (sprite.percussion) {
+				paintLearningNote(painter, this.config.getColorNote(), x, y, width, this.getOvalSize());
+			} else {
+				UIColor noteColor = this.config.getLearningNoteColor(sprite.midiNote, sprite.keySignature, sprite.altEnharmonic);
+				UIColor textColor = this.config.getLearningNoteTextColor(sprite.midiNote, sprite.keySignature, sprite.altEnharmonic);
+				this.paintLearningNoteText(painter, textColor, noteColor, x, y, String.valueOf(sprite.fret), width);
+			}
+		}
+		painter.setLineWidth(1);
 	}
 
 
@@ -1063,6 +1260,17 @@ public class TGFretBoard {
 				new TGActionProcessor(TGFretBoard.this.context, TGGoRightAction.NAME).process();
 			}
 		}
+	}
+
+	private static class LearningSprite {
+		long preciseStart;
+		long preciseDuration;
+		int stringIndex;
+		int fret;
+		int midiNote;
+		int keySignature;
+		boolean altEnharmonic;
+		boolean percussion;
 	}
 
 	private class TGNotesPainterHandle implements TGBufferedPainterHandle {
