@@ -108,6 +108,20 @@ public class TGFretBoard {
 	private long learningLastPlayPrecise;
 	private long learningLastStampedPrecise;
 	private int learningTrackNumber;
+	/** Wall-clock timestamp (ms) when the current count-in phase started. */
+	private long learningCountInWallStartMs;
+	/**
+	 * Precise-time duration of the neck travel (last fret -> fret 0).
+	 * Used as look-ahead while playing and as count-in length at start.
+	 */
+	private long learningLeadInPrecise;
+	/** Song precise-time of the first note that will be hit at the end of count-in. */
+	private long learningCountInTargetPrecise;
+	/** True while MidiPlayerCountDown is running and LM is active. */
+	private boolean learningCountInActive;
+	/** Frozen metronome tick length (ms) and beat precise duration for the active count-in. */
+	private long learningCountInTickMs;
+	private long learningBeatPrecise;
 
 	public TGFretBoard(TGContext context, UIContainer parent) {
 		this.context = context;
@@ -754,6 +768,7 @@ public class TGFretBoard {
 		boolean enabled = TuxGuitar.getInstance().getConfig().getBooleanValue(TGConfigKeys.LEMO_LM_ENABLED, false);
 		if (enabled) {
 			this.learningMode.setBgColor(getUIFactory().createColor(0, 255, 0));
+			this.syncLearningCountIn();
 		} else {
 			this.learningMode.setBgColor(null);
 		}
@@ -771,6 +786,9 @@ public class TGFretBoard {
 		}
 		this.resetLearningLayer();
 		this.layoutNotesOverlay();
+		if (next) {
+			this.syncLearningCountIn();
+		}
 		this.notesComposite.redraw();
 	}
 
@@ -785,9 +803,19 @@ public class TGFretBoard {
 		this.learningLastPlayPrecise = Long.MIN_VALUE;
 		this.learningLastStampedPrecise = Long.MIN_VALUE;
 		this.learningTrackNumber = -1;
+		this.learningCountInActive = false;
+		this.learningLeadInPrecise = 0L;
+		this.learningCountInTargetPrecise = 0L;
+		this.learningCountInWallStartMs = 0L;
+		this.learningCountInTickMs = 0L;
+		this.learningBeatPrecise = 0L;
 	}
 
-	private long getPlayPreciseTime() {
+	/**
+	 * Real play time from the transport / caret (no visual offset).
+	 * This is the MIDI / staff cursor time.
+	 */
+	private long getRealPlayPreciseTime() {
 		MidiPlayer player = MidiPlayer.getInstance(this.context);
 		if (player.isRunning()) {
 			return TGDuration.toPreciseTime(TGTransport.getInstance(this.context).getCache().getPlayStart());
@@ -796,6 +824,105 @@ public class TGFretBoard {
 			return this.beatPreciseStart(this.beat);
 		}
 		return 0L;
+	}
+
+	/**
+	 * Visual play time used for sprite positioning.
+	 * During count-in the clock runs from (target - leadIn) to target so the
+	 * first note travels from the last fret to fret 0. After count-in it
+	 * equals the real MIDI time: a note is on fret 0 exactly when it sounds.
+	 */
+	private long getPlayPreciseTime() {
+		if (this.learningCountInActive && this.learningLeadInPrecise > 0L
+				&& this.learningCountInTickMs > 0L && this.learningBeatPrecise > 0L) {
+			long elapsedMs = System.currentTimeMillis() - this.learningCountInWallStartMs;
+			if (elapsedMs < 0L) {
+				elapsedMs = 0L;
+			}
+			// Advance song time at the same rate as MidiPlayerCountDown:
+			// one metronome tick (tickMs) = one denominator beat (beatPrecise).
+			long advanced = Math.round((double) elapsedMs
+					* (double) this.learningBeatPrecise
+					/ (double) this.learningCountInTickMs);
+			long visual = this.learningCountInTargetPrecise - this.learningLeadInPrecise + advanced;
+			long min = this.learningCountInTargetPrecise - this.learningLeadInPrecise;
+			if (visual < min) {
+				visual = min;
+			}
+			if (visual > this.learningCountInTargetPrecise) {
+				visual = this.learningCountInTargetPrecise;
+			}
+			return visual;
+		}
+		return this.getRealPlayPreciseTime();
+	}
+
+	private TGMeasure resolveLearningMeasure() {
+		if (this.beat != null && this.beat.getMeasure() != null) {
+			return this.beat.getMeasure();
+		}
+		try {
+			TGBeat caretBeat = TablatureEditor.getInstance(this.context).getTablature().getCaret().getSelectedBeat();
+			if (caretBeat != null && caretBeat.getMeasure() != null) {
+				return caretBeat.getMeasure();
+			}
+		} catch (Throwable ignored) {
+			// ignore
+		}
+		TGTrack track = this.getTrack();
+		if (track != null && track.countMeasures() > 0) {
+			return track.getMeasure(0);
+		}
+		return null;
+	}
+
+	/**
+	 * Milliseconds of one metronome tick, same formula as MidiPlayerCountDown.start().
+	 */
+	private long getCountInTickLengthMs() {
+		int qpm = 120;
+		long denomTime = TGDuration.QUARTER_TIME;
+		TGMeasure measure = this.resolveLearningMeasure();
+		if (measure != null) {
+			if (measure.getTempo() != null) {
+				qpm = measure.getTempo().getQuarterValue();
+			}
+			if (measure.getTimeSignature() != null
+					&& measure.getTimeSignature().getDenominator() != null) {
+				denomTime = measure.getTimeSignature().getDenominator().getTime();
+			}
+		}
+		if (qpm <= 0) {
+			qpm = 120;
+		}
+		if (denomTime <= 0L) {
+			denomTime = TGDuration.QUARTER_TIME;
+		}
+		int percent = 100;
+		try {
+			MidiPlayer player = MidiPlayer.getInstance(this.context);
+			if (player.getCountDown() != null && player.getCountDown().getTempoPercent() > 0) {
+				percent = player.getCountDown().getTempoPercent();
+			} else {
+				percent = player.getMode().getCurrentPercent();
+			}
+		} catch (Throwable ignored) {
+			percent = 100;
+		}
+		if (percent <= 0) {
+			percent = 100;
+		}
+		int tgTempo = (qpm * percent) / 100;
+		if (tgTempo <= 0) {
+			tgTempo = 120;
+		}
+		return Math.max(1L, (long) (1000.00 * (60.00 / tgTempo * denomTime) / TGDuration.QUARTER_TIME));
+	}
+
+	private void freezeLearningCountInClock() {
+		this.learningBeatPrecise = this.getBeatPreciseDuration();
+		this.learningCountInTickMs = this.getCountInTickLengthMs();
+		this.learningLeadInPrecise = this.computeLearningLeadInPrecise();
 	}
 
 	private long beatPreciseStart(TGBeat beat) {
@@ -822,7 +949,8 @@ public class TGFretBoard {
 		if (this.frets.length == 0) {
 			return 0;
 		}
-		return this.toNotesLayerX(this.frets[this.frets.length - 1]);
+		// Hit line = fret 0 (nut). Notes spawn at the last fret and scroll here.
+		return this.toNotesLayerX(this.frets[0]);
 	}
 
 	private int toLearningX(long notePreciseStart, long playPrecise) {
@@ -837,31 +965,139 @@ public class TGFretBoard {
 	}
 
 	private void updateLearningLayer() {
+		this.syncLearningCountIn();
+		this.updateLearningCountInState();
+
 		long playPrecise = this.getPlayPreciseTime();
+		long lookAhead = this.learningLeadInPrecise;
+		if (lookAhead <= 0L) {
+			lookAhead = this.computeLearningLeadInPrecise();
+			this.learningLeadInPrecise = lookAhead;
+		}
+		long horizon = playPrecise + lookAhead;
+
 		TGTrack track = this.getTrack();
 		int trackNumber = (track != null ? track.getNumber() : -1);
 
 		boolean reset = this.learningLastPlayPrecise == Long.MIN_VALUE
 			|| trackNumber != this.learningTrackNumber
 			|| playPrecise < this.learningLastPlayPrecise
-			|| (playPrecise - this.learningLastPlayPrecise) > TGDuration.WHOLE_PRECISE_DURATION;
+			|| (playPrecise - this.learningLastPlayPrecise) > Math.max(TGDuration.WHOLE_PRECISE_DURATION, lookAhead);
 
 		if (reset) {
 			this.learningSprites.clear();
-			this.stampLearningBeat(this.beat);
-			if (this.beat != null) {
-				this.learningLastStampedPrecise = this.beatPreciseStart(this.beat);
-			} else {
-				this.learningLastStampedPrecise = playPrecise;
-			}
-		} else if (playPrecise > this.learningLastStampedPrecise) {
-			this.stampLearningNotesBetween(this.learningLastStampedPrecise, playPrecise);
-			this.learningLastStampedPrecise = playPrecise;
+			this.stampLearningNotesBetween(playPrecise - 1L, horizon);
+			this.learningLastStampedPrecise = horizon;
+		} else if (horizon > this.learningLastStampedPrecise) {
+			this.stampLearningNotesBetween(this.learningLastStampedPrecise, horizon);
+			this.learningLastStampedPrecise = horizon;
 		}
 
 		this.cullLearningSprites(playPrecise);
 		this.learningLastPlayPrecise = playPrecise;
 		this.learningTrackNumber = trackNumber;
+	}
+
+	/**
+	 * Detect start / end of MidiPlayerCountDown and maintain the visual
+	 * lead-in clock so that the first note reaches fret 0 when the
+	 * sequencer actually begins.
+	 */
+	private void updateLearningCountInState() {
+		if (!isLearningModeEnabled()) {
+			this.learningCountInActive = false;
+			return;
+		}
+		MidiPlayer player = MidiPlayer.getInstance(this.context);
+		boolean countInRunning = player.getCountDown() != null
+				&& player.getCountDown().isEnabled()
+				&& player.getCountDown().isRunning();
+
+		if (countInRunning && !this.learningCountInActive) {
+			this.freezeLearningCountInClock();
+			long target = this.getRealPlayPreciseTime();
+			if (this.beat != null) {
+				target = this.beatPreciseStart(this.beat);
+			}
+			this.learningCountInTargetPrecise = target;
+			this.learningCountInWallStartMs = System.currentTimeMillis();
+			this.learningCountInActive = true;
+			this.learningLastPlayPrecise = Long.MIN_VALUE;
+		} else if (!countInRunning && this.learningCountInActive) {
+			this.learningCountInActive = false;
+			this.learningLastPlayPrecise = Long.MIN_VALUE;
+		}
+	}
+
+	/**
+	 * Enable the player count-in and set its tick count to the neck-travel
+	 * duration (beats needed for a note to go from last fret to fret 0).
+	 */
+	private void syncLearningCountIn() {
+		if (!isLearningModeEnabled()) {
+			return;
+		}
+		MidiPlayer player = MidiPlayer.getInstance(this.context);
+		if (player.getCountDown() != null && player.getCountDown().isRunning()) {
+			return;
+		}
+		this.freezeLearningCountInClock();
+		int ticks = this.computeLearningCountInTicks(this.computeLearningTravelPrecise());
+		player.getCountDown().setEnabled(true);
+		player.getCountDown().setTickCount(ticks);
+	}
+
+	/**
+	 * Precise-time distance from last fret to fret 0 at the current scroll speed.
+	 */
+	private long computeLearningTravelPrecise() {
+		if (this.frets.length < 2) {
+			return TGDuration.WHOLE_PRECISE_DURATION;
+		}
+		float distance = Math.abs(this.frets[this.frets.length - 1] - this.frets[0]);
+		float pxPer = this.getPixelsPerPreciseTime();
+		if (pxPer <= 0f || distance <= 0f) {
+			return TGDuration.WHOLE_PRECISE_DURATION;
+		}
+		long travel = Math.round(distance / pxPer);
+		long min = TGDuration.WHOLE_PRECISE_DURATION / TGDuration.QUARTER;
+		return Math.max(min, travel);
+	}
+
+	private long getBeatPreciseDuration() {
+		// One metronome tick = denominator duration, converted to precise time
+		// (same unit MidiPlayerCountDown uses via denominator.getTime()).
+		TGMeasure measure = this.resolveLearningMeasure();
+		if (measure != null && measure.getTimeSignature() != null
+				&& measure.getTimeSignature().getDenominator() != null) {
+			long denomTime = measure.getTimeSignature().getDenominator().getTime();
+			if (denomTime > 0L && TGDuration.WHOLE_PRECISE_DURATION > 0L && TGDuration.QUARTER_TIME > 0L) {
+				return Math.max(1L, denomTime * TGDuration.WHOLE_PRECISE_DURATION
+						/ (TGDuration.QUARTER_TIME * TGDuration.QUARTER));
+			}
+		}
+		long quarter = TGDuration.WHOLE_PRECISE_DURATION / TGDuration.QUARTER;
+		return Math.max(1L, quarter);
+	}
+
+	private int computeLearningCountInTicks(long travelPrecise) {
+		long beatPrecise = this.getBeatPreciseDuration();
+		if (beatPrecise <= 0L) {
+			beatPrecise = 1L;
+		}
+		int ticks = (int) Math.ceil((double) Math.max(1L, travelPrecise) / (double) beatPrecise);
+		return Math.max(1, ticks);
+	}
+
+	/**
+	 * Count-in / look-ahead duration in song precise time: an integer number
+	 * of beats covering at least the last-fret -> fret 0 travel.
+	 */
+	private long computeLearningLeadInPrecise() {
+		long travel = this.computeLearningTravelPrecise();
+		long beatPrecise = this.getBeatPreciseDuration();
+		int ticks = this.computeLearningCountInTicks(travel);
+		return ticks * beatPrecise;
 	}
 
 	private void stampLearningNotesBetween(long fromExclusive, long toInclusive) {
@@ -1134,6 +1370,9 @@ public class TGFretBoard {
 		this.initFrets(FRET_FROM_X);
 		this.initStrings(getStringCount());
 		this.layoutNotesOverlay();
+		if (isLearningModeEnabled()) {
+			this.syncLearningCountIn();
+		}
 		this.setChanges(false);
 	}
 
