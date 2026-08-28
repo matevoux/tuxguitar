@@ -45,6 +45,7 @@ public class TGFretBoardConfig {
 	public static final int DISPLAY_TEXT_SCALE = 0x02;
 	public static final int DIRECTION_RIGHT = 0;
 	public static final int DIRECTION_LEFT = 1;
+	public static final int FRET_OCTAVE = 12;
 
 	private static final int LEARNING_VARIANT_NATURAL = 0;
 	private static final int LEARNING_VARIANT_SHARP = 1;
@@ -67,6 +68,13 @@ public class TGFretBoardConfig {
 		{ 123,  31, 162 }  // B
 	};
 
+	// Octave contour: brown family below fret 12, gray family from 12 up.
+	// Dark/light shade is chosen from the fill so the ring stays visible on every note color.
+	private static final int[] BORDER_BROWN_DARK = { 72, 42, 24 };
+	private static final int[] BORDER_BROWN_LIGHT = { 232, 204, 158 };
+	private static final int[] BORDER_GRAY_DARK = { 48, 50, 54 };
+	private static final int[] BORDER_GRAY_LIGHT = { 206, 208, 212 };
+
 	private TGContext context;
 	private int style;
 	private int direction;
@@ -80,6 +88,10 @@ public class TGFretBoardConfig {
 	private UIColor colorNoteText;
 	private UIColor colorScaleText;
 	private UIColor colorTonicText;
+	private UIColor colorBorderBrownDark;
+	private UIColor colorBorderBrownLight;
+	private UIColor colorBorderGrayDark;
+	private UIColor colorBorderGrayLight;
 	private UIColor[][] learningNoteColors;
 	private UIColor[][] learningNoteTextColors;
 
@@ -131,6 +143,14 @@ public class TGFretBoardConfig {
 		return colorTonicText;
 	}
 
+	public UIColor getNoteBorderColor(int fret, UIColor fill) {
+		boolean lightFill = isLightColor(fill);
+		if (fret < FRET_OCTAVE) {
+			return lightFill ? this.colorBorderBrownDark : this.colorBorderBrownLight;
+		}
+		return lightFill ? this.colorBorderGrayDark : this.colorBorderGrayLight;
+	}
+
 	public UIColor getLearningNoteColor(int midiNote, int keySignature, boolean altEnharmonic) {
 		int pitch = positiveModulo(midiNote, LEARNING_NOTE_RGB.length);
 		int variant = getLearningColorVariant(midiNote, keySignature, altEnharmonic);
@@ -170,15 +190,27 @@ public class TGFretBoardConfig {
 		this.colorNoteText = createColor(factory, this.colorForeground(this.colorNote));
 		this.colorScaleText = createColor(factory, this.colorForeground(this.colorScale));
 		this.colorTonicText = createColor(factory, this.colorForeground(this.colorTonic));
+		this.colorBorderBrownDark = createColor(factory, toColorModel(BORDER_BROWN_DARK));
+		this.colorBorderBrownLight = createColor(factory, toColorModel(BORDER_BROWN_LIGHT));
+		this.colorBorderGrayDark = createColor(factory, toColorModel(BORDER_GRAY_DARK));
+		this.colorBorderGrayLight = createColor(factory, toColorModel(BORDER_GRAY_LIGHT));
 		this.loadLearningNoteColors(factory);
 	}
 
 	private UIColorModel colorForeground(UIColor colorBackground) {
-		int brightness = colorBackground.getRed() + colorBackground.getGreen() + colorBackground.getBlue();
-		if (brightness > 3 * 0x80) {
+		if (isLightColor(colorBackground)) {
 			return new UIColorModel(0x00, 0x00, 0x00);
 		}
 		return new UIColorModel(0xff, 0xff, 0xff);
+	}
+
+	private static boolean isLightColor(UIColor color) {
+		int brightness = color.getRed() + color.getGreen() + color.getBlue();
+		return brightness > 3 * 0x80;
+	}
+
+	private static UIColorModel toColorModel(int[] rgb) {
+		return new UIColorModel(rgb[0], rgb[1], rgb[2]);
 	}
 
 	private void loadLearningNoteColors(UIFactory factory) {
@@ -365,6 +397,10 @@ public class TGFretBoardConfig {
 		this.colorNoteText.dispose();
 		this.colorScaleText.dispose();
 		this.colorTonicText.dispose();
+		this.colorBorderBrownDark.dispose();
+		this.colorBorderBrownLight.dispose();
+		this.colorBorderGrayDark.dispose();
+		this.colorBorderGrayLight.dispose();
 		this.disposeLearningNoteColors();
 	}
 

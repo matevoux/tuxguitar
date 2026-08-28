@@ -43,6 +43,7 @@ import app.tuxguitar.ui.layout.UIAbstractLayout;
 import app.tuxguitar.ui.layout.UITableLayout;
 import app.tuxguitar.ui.widget.UILayoutContainer;
 import app.tuxguitar.ui.resource.UIColor;
+import app.tuxguitar.ui.resource.UIFont;
 import app.tuxguitar.ui.resource.UIImage;
 import app.tuxguitar.ui.resource.UIPainter;
 import app.tuxguitar.ui.resource.UIRectangle;
@@ -122,6 +123,8 @@ public class TGFretBoard {
 	/** Frozen metronome tick length (ms) and beat precise duration for the active count-in. */
 	private long learningCountInTickMs;
 	private long learningBeatPrecise;
+	private UIFont noteFont;
+	private int noteFontSpacing;
 
 	public TGFretBoard(TGContext context, UIContainer parent) {
 		this.context = context;
@@ -532,10 +535,10 @@ public class TGFretBoard {
 					if( (this.config.getStyle() & TGFretBoardConfig.DISPLAY_TEXT_SCALE) != 0 ){
 						String noteName = TGMusicKeyUtils.noteName(noteValue, keySignature);
 						UIColor textColor = isTonic ? this.config.getColorTonicText() : this.config.getColorScaleText();
-						paintKeyText(painter, textColor, ovalColor, x, y, noteName);
+						paintKeyText(painter, textColor, ovalColor, x, y, noteName, j);
 					}
 					else{
-						paintKeyOval(painter, ovalColor, x, y);
+						paintKeyOval(painter, ovalColor, x, y, j);
 					}
 				}
 			}
@@ -565,10 +568,10 @@ public class TGFretBoard {
 
 						if( (this.config.getStyle() & TGFretBoardConfig.DISPLAY_TEXT_NOTE) != 0 ){
 							int realValue = track.getString(note.getString()).getValue() + note.getValue();
-							paintKeyText(painter,this.config.getColorNoteText(), this.config.getColorNote(), x, y, TGMusicKeyUtils.noteName(realValue, keySignature, note.isAltEnharmonic()));
+							paintKeyText(painter,this.config.getColorNoteText(), this.config.getColorNote(), x, y, TGMusicKeyUtils.noteName(realValue, keySignature, note.isAltEnharmonic()), fretIndex);
 						}
 						else{
-							paintKeyOval(painter,this.config.getColorNote(), x, y);
+							paintKeyOval(painter,this.config.getColorNote(), x, y, fretIndex);
 						}
 					}
 				}
@@ -577,54 +580,77 @@ public class TGFretBoard {
 		}
 	}
 
-	private void paintKeyOval(UIPainter painter, UIColor background,int x, int y) {
-		this.paintKeyOval(painter, background, x, y, this.getOvalSize());
-	}
-	private void paintKeyOval(UIPainter painter, UIColor background,int x, int y, int ovalSize) {
-		painter.setBackground(background);
-		painter.initPath(UIPainter.PATH_FILL);
-		painter.moveTo(x, y);
-		painter.addCircle(x, y, ovalSize);
-		painter.closePath();
+	private void paintKeyOval(UIPainter painter, UIColor background, int x, int y, int fret) {
+		this.paintKeyOval(painter, background, x, y, this.getNoteSize(), fret);
 	}
 
-	private void paintLearningNote(UIPainter painter, UIColor background, int x, int y, int width, int height) {
+	private void paintKeyOval(UIPainter painter, UIColor background, int x, int y, int ovalSize, int fret) {
 		painter.setBackground(background);
 		painter.initPath(UIPainter.PATH_FILL);
+		painter.addCircle(x, y, ovalSize);
+		painter.closePath();
+		this.paintCircleBorder(painter, x, y, ovalSize, fret, background);
+	}
+
+	private void paintCircleBorder(UIPainter painter, int x, int y, int size, int fret, UIColor fill) {
+		int borderW = this.getNoteBorderWidth();
+		painter.setLineStyleSolid();
+		painter.setForeground(this.config.getNoteBorderColor(fret, fill));
+		painter.setLineWidth(borderW);
+		painter.initPath(UIPainter.PATH_DRAW);
+		painter.addCircle(x, y, Math.max(1, size - borderW));
+		painter.closePath();
+		painter.setLineWidth(1);
+	}
+
+	private void paintLearningNote(UIPainter painter, UIColor background, int x, int y, int width, int height, int fret) {
 		float w = width;
 		float h = height;
 		float radius = Math.min(w, h) / 2f;
 		float left = this.getLearningNoteLeft(x, w);
-		painter.addRoundedRectangle(left, y - (h / 2f), w, h, radius);
+		float top = y - (h / 2f);
+		painter.setBackground(background);
+		painter.initPath(UIPainter.PATH_FILL);
+		painter.addRoundedRectangle(left, top, w, h, radius);
 		painter.closePath();
+		this.paintRoundedBorder(painter, left, top, w, h, radius, fret, background);
 	}
 
-	private void paintKeyText(UIPainter painter, UIColor foreground, UIColor background, int x, int y, String text) {
-		if (!getTrack().isPercussion()) {
-			painter.setBackground(background);
-			painter.setForeground(foreground);
-			painter.setFont(this.config.getFont());
+	private void paintRoundedBorder(UIPainter painter, float left, float top, float w, float h, float radius, int fret, UIColor fill) {
+		int borderW = this.getNoteBorderWidth();
+		float inset = borderW / 2f;
+		painter.setLineStyleSolid();
+		painter.setForeground(this.config.getNoteBorderColor(fret, fill));
+		painter.setLineWidth(borderW);
+		painter.initPath(UIPainter.PATH_DRAW);
+		painter.addRoundedRectangle(
+			left + inset,
+			top + inset,
+			Math.max(1f, w - borderW),
+			Math.max(1f, h - borderW),
+			Math.max(0f, radius - inset)
+		);
+		painter.closePath();
+		painter.setLineWidth(1);
+	}
 
+	private void paintKeyText(UIPainter painter, UIColor foreground, UIColor background, int x, int y, String text, int fret) {
+		if (!getTrack().isPercussion()) {
+			this.paintKeyOval(painter, background, x, y, this.getNoteSize(), fret);
+			painter.setFont(this.getNoteFont());
+			painter.setForeground(foreground);
 			float fmWidth = painter.getFMWidth(text);
-			float fmHeight = painter.getFMHeight();
-			int ovalSize = (int)Math.max(fmWidth, fmHeight) + this.stringSpacing/10;
-			ovalSize = Math.min(ovalSize, this.getMaxOvalSize());
-			this.paintKeyOval(painter, background, x, y, ovalSize);
-			painter.drawString(text, x - (fmWidth / 2f),y + painter.getFMMiddleLine());
+			painter.drawString(text, x - (fmWidth / 2f), y + painter.getFMMiddleLine());
 		}
 	}
 
-	private void paintLearningNoteText(UIPainter painter, UIColor foreground, UIColor background, int x, int y, String text, int width) {
-		painter.setBackground(background);
-		painter.setForeground(foreground);
-		painter.setFont(this.config.getFont());
-
-		float fmWidth = painter.getFMWidth(text);
-		float fmHeight = painter.getFMHeight();
-		int height = (int)Math.max(fmWidth, fmHeight) + this.stringSpacing/10;
-		height = Math.min(height, this.getMaxOvalSize());
+	private void paintLearningNoteText(UIPainter painter, UIColor foreground, UIColor background, int x, int y, String text, int width, int fret) {
+		int height = this.getNoteSize();
 		width = Math.max(width, 2);
-		paintLearningNote(painter, background, x, y, width, height);
+		paintLearningNote(painter, background, x, y, width, height, fret);
+		painter.setFont(this.getNoteFont());
+		painter.setForeground(foreground);
+		float fmWidth = painter.getFMWidth(text);
 		float left = this.getLearningNoteLeft(x, width);
 		painter.drawString(text, left + (width / 2f) - (fmWidth / 2f), y + painter.getFMMiddleLine());
 	}
@@ -744,8 +770,38 @@ public class TGFretBoard {
 		return ((this.stringSpacing / 2) + (this.stringSpacing / 10));
 	}
 
-	private int getMaxOvalSize() {
-		return (this.stringSpacing - this.stringSpacing/10);
+	private int getNoteBorderWidth() {
+		return Math.max(1, Math.round(this.stringSpacing / 10f));
+	}
+
+	private int getNoteSize() {
+		return Math.max(1, this.stringSpacing - this.getNoteBorderWidth());
+	}
+
+	private int getNoteInnerSize() {
+		return Math.max(1, this.getNoteSize() - (2 * this.getNoteBorderWidth()));
+	}
+
+	private float getNoteFontHeight() {
+		return Math.max(4f, this.getNoteInnerSize() * 0.72f);
+	}
+
+	private UIFont getNoteFont() {
+		if (this.noteFont == null || this.noteFont.isDisposed() || this.noteFontSpacing != this.stringSpacing) {
+			this.disposeNoteFont();
+			UIFont base = this.config.getFont();
+			this.noteFont = this.getUIFactory().createFont(base.getName(), this.getNoteFontHeight(), base.isBold(), base.isItalic());
+			this.noteFontSpacing = this.stringSpacing;
+		}
+		return this.noteFont;
+	}
+
+	private void disposeNoteFont() {
+		if (this.noteFont != null && !this.noteFont.isDisposed()) {
+			this.noteFont.dispose();
+		}
+		this.noteFont = null;
+		this.noteFontSpacing = -1;
 	}
 
 	private void addNote(int fret, int string) {
@@ -934,7 +990,7 @@ public class TGFretBoard {
 	}
 
 	private float getLearningUnitWidth() {
-		return Math.max(this.getOvalSize(), 8);
+		return Math.max(this.getNoteSize(), 8);
 	}
 
 	private float getPixelsPerPreciseTime() {
@@ -1219,11 +1275,11 @@ public class TGFretBoard {
 			int width = this.toLearningWidth(sprite.preciseStart, sprite.preciseDuration, playPrecise);
 			int y = this.strings[sprite.stringIndex];
 			if (sprite.percussion) {
-				paintLearningNote(painter, this.config.getColorNote(), x, y, width, this.getOvalSize());
+				paintLearningNote(painter, this.config.getColorNote(), x, y, width, this.getNoteSize(), sprite.fret);
 			} else {
 				UIColor noteColor = this.config.getLearningNoteColor(sprite.midiNote, sprite.keySignature, sprite.altEnharmonic);
 				UIColor textColor = this.config.getLearningNoteTextColor(sprite.midiNote, sprite.keySignature, sprite.altEnharmonic);
-				this.paintLearningNoteText(painter, textColor, noteColor, x, y, String.valueOf(sprite.fret), width);
+				this.paintLearningNoteText(painter, textColor, noteColor, x, y, String.valueOf(sprite.fret), width, sprite.fret);
 			}
 		}
 		painter.setLineWidth(1);
@@ -1316,6 +1372,7 @@ public class TGFretBoard {
 	public void dispose(){
 		this.control.dispose();
 		this.disposeFretBoardImage();
+		this.disposeNoteFont();
 		this.config.dispose();
 	}
 
@@ -1390,7 +1447,7 @@ public class TGFretBoard {
 		if (!isLearningModeEnabled() || width <= 0f) {
 			return 0f;
 		}
-		int unit = Math.max(this.getOvalSize(), 8);
+		int unit = Math.round(this.getLearningUnitWidth());
 		float margin = unit * LEARNING_MARGIN_UNITS;
 		float max = width * LEARNING_MARGIN_MAX_RATIO;
 		float min = unit * 4f;
@@ -1455,6 +1512,7 @@ public class TGFretBoard {
 
 	public void reloadFromConfig(){
 		this.handSelector.setSelectedItem(new UISelectItem<Integer>(null, this.getDirection(this.config.getDirection())));
+		this.disposeNoteFont();
 		this.setChanges(true);
 		this.redraw();
 	}
