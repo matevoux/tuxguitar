@@ -19,6 +19,7 @@ import app.tuxguitar.app.view.main.TGWindow;
 import app.tuxguitar.app.view.util.TGBufferedPainterListenerLocked;
 import app.tuxguitar.app.view.util.TGBufferedPainterLocked.TGBufferedPainterHandle;
 import app.tuxguitar.document.TGDocumentContextAttributes;
+import app.tuxguitar.document.TGDocumentManager;
 import app.tuxguitar.editor.TGEditorManager;
 import app.tuxguitar.editor.action.TGActionProcessor;
 import app.tuxguitar.editor.action.duration.TGDecrementDurationAction;
@@ -31,6 +32,7 @@ import app.tuxguitar.song.models.TGDuration;
 import app.tuxguitar.song.models.TGMeasure;
 import app.tuxguitar.song.models.TGNote;
 import app.tuxguitar.song.models.TGScale;
+import app.tuxguitar.song.models.TGSong;
 import app.tuxguitar.song.models.TGString;
 import app.tuxguitar.song.models.TGTrack;
 import app.tuxguitar.song.models.TGVoice;
@@ -106,9 +108,15 @@ public class TGFretBoard {
 	protected UICanvas notesComposite;
 	private float notesLayerOffsetX;
 	private List<LearningSprite> learningSprites;
+	private TGLearningPlaybackTimeline learningTimeline;
 	private long learningLastPlayPrecise;
 	private long learningLastStampedPrecise;
 	private int learningTrackNumber;
+	/**
+	 * Added to player tick-precise time so the visual clock stays monotonic
+	 * across player-loop restarts (tick jumps back to loopSPosition).
+	 */
+	private long learningLoopOffsetPrecise;
 	/** Wall-clock timestamp (ms) when the current count-in phase started. */
 	private long learningCountInWallStartMs;
 	/**
@@ -116,7 +124,7 @@ public class TGFretBoard {
 	 * Used as look-ahead while playing and as count-in length at start.
 	 */
 	private long learningLeadInPrecise;
-	/** Song precise-time of the first note that will be hit at the end of count-in. */
+	/** Playback precise-time of the first note that will be hit at the end of count-in. */
 	private long learningCountInTargetPrecise;
 	/** True while MidiPlayerCountDown is running and LM is active. */
 	private boolean learningCountInActive;
@@ -131,6 +139,7 @@ public class TGFretBoard {
 		this.config = new TGFretBoardConfig(context);
 		this.config.load();
 		this.learningSprites = new ArrayList<LearningSprite>();
+		this.learningTimeline = new TGLearningPlaybackTimeline();
 		this.resetLearningLayer();
 		this.stringSpacing = TuxGuitar.getInstance().getConfig().getIntegerValue(TGConfigKeys.FRETBOARD_STRING_SPACING);
 		this.control = getUIFactory().createPanel(parent, false);
@@ -834,21 +843,76 @@ public class TGFretBoard {
 		this.learningCountInWallStartMs = 0L;
 		this.learningCountInTickMs = 0L;
 		this.learningBeatPrecise = 0L;
+		this.learningLoopOffsetPrecise = 0L;
+	}
+
+	private void syncLearningTimeline() {
+		MidiPlayer player = MidiPlayer.getInstance(this.context);
+		if (!player.isRunning()) {
+			player.updateLoop(false);
+		}
+		TGSong song = TGDocumentManager.getInstance(this.context).getSong();
+		if (this.learningTimeline.rebuildIfNeeded(song, player.getLoopSHeader(), player.getLoopEHeader())) {
+			this.learningLastPlayPrecise = Long.MIN_VALUE;
+			this.learningLastStampedPrecise = Long.MIN_VALUE;
+			this.learningLoopOffsetPrecise = 0L;
+		}
 	}
 
 	/**
-	 * Real play time from the transport / caret (no visual offset).
-	 * This is the MIDI / staff cursor time.
+	 * Real play time from the player tick (expanded for repeats) or the caret.
+	 * This is the MIDI / staff cursor time in playback precise-time.
 	 */
 	private long getRealPlayPreciseTime() {
 		MidiPlayer player = MidiPlayer.getInstance(this.context);
 		if (player.isRunning()) {
-			return TGDuration.toPreciseTime(TGTransport.getInstance(this.context).getCache().getPlayStart());
+			long tickPrecise = TGDuration.toPreciseTime(player.getTickPosition());
+			long visual = tickPrecise + this.learningLoopOffsetPrecise;
+			if (this.learningLastPlayPrecise != Long.MIN_VALUE && visual < this.learningLastPlayPrecise) {
+				if (this.tryAbsorbLoopWrap(player, tickPrecise)) {
+					visual = tickPrecise + this.learningLoopOffsetPrecise;
+				} else {
+					this.learningLoopOffsetPrecise = 0L;
+					this.learningLastPlayPrecise = Long.MIN_VALUE;
+					visual = tickPrecise;
+				}
+			}
+			return visual;
 		}
+		this.learningLoopOffsetPrecise = 0L;
 		if (this.beat != null) {
-			return this.beatPreciseStart(this.beat);
+			return this.learningTimeline.toPlayPrecise(this.beatPreciseStart(this.beat));
 		}
 		return 0L;
+	}
+
+	/**
+	 * If the player looped (tick jumped back to the sequence start), keep the
+	 * visual clock monotonic so already-stamped look-ahead sprites stay put.
+	 */
+	private boolean tryAbsorbLoopWrap(MidiPlayer player, long tickPrecise) {
+		if (player.getMode() == null || !player.getMode().isLoop()) {
+			return false;
+		}
+		long seqStart = this.learningTimeline.getSequencePlayPreciseStart();
+		long seqEnd = this.learningTimeline.getSequencePlayPreciseEnd();
+		long seqLen = this.learningTimeline.getSequencePlayPreciseLength();
+		if (seqLen <= 0L) {
+			return false;
+		}
+		long lastTick = this.learningLastPlayPrecise - this.learningLoopOffsetPrecise;
+		long threshold = Math.max(this.learningLeadInPrecise, TGDuration.WHOLE_PRECISE_DURATION);
+		boolean fromEnd = lastTick >= (seqEnd - threshold);
+		boolean toStart = tickPrecise <= (seqStart + threshold);
+		if (!fromEnd || !toStart) {
+			return false;
+		}
+		this.learningLoopOffsetPrecise = this.learningLastPlayPrecise - tickPrecise;
+		if (this.learningLoopOffsetPrecise < 0L) {
+			this.learningLoopOffsetPrecise = 0L;
+			return false;
+		}
+		return true;
 	}
 
 	/**
@@ -990,6 +1054,7 @@ public class TGFretBoard {
 	}
 
 	private void updateLearningLayer() {
+		this.syncLearningTimeline();
 		this.syncLearningCountIn();
 		this.updateLearningCountInState();
 
@@ -1040,11 +1105,7 @@ public class TGFretBoard {
 
 		if (countInRunning && !this.learningCountInActive) {
 			this.freezeLearningCountInClock();
-			long target = this.getRealPlayPreciseTime();
-			if (this.beat != null) {
-				target = this.beatPreciseStart(this.beat);
-			}
-			this.learningCountInTargetPrecise = target;
+			this.learningCountInTargetPrecise = this.getRealPlayPreciseTime();
 			this.learningCountInWallStartMs = System.currentTimeMillis();
 			this.learningCountInActive = true;
 			this.learningLastPlayPrecise = Long.MIN_VALUE;
@@ -1130,25 +1191,16 @@ public class TGFretBoard {
 		if (track == null) {
 			return;
 		}
-		for (int i = 0; i < track.countMeasures(); i++) {
-			TGMeasure measure = track.getMeasure(i);
-			long measureStart = measure.getPreciseStart();
-			long measureEnd = measureStart + measure.getPreciseLength();
-			if (measureEnd <= fromExclusive || measureStart > toInclusive) {
-				continue;
+		MidiPlayer player = MidiPlayer.getInstance(this.context);
+		boolean wrap = player.getMode() != null && player.getMode().isLoop();
+		this.learningTimeline.forEachBeat(track, fromExclusive, toInclusive, wrap, new TGLearningPlaybackTimeline.BeatVisitor() {
+			public void visit(TGBeat beat, long playPreciseStart) {
+				TGFretBoard.this.stampLearningBeat(beat, playPreciseStart);
 			}
-			List<TGBeat> beats = measure.getBeats();
-			for (int b = 0; b < beats.size(); b++) {
-				TGBeat beat = beats.get(b);
-				long start = this.beatPreciseStart(beat);
-				if (start > fromExclusive && start <= toInclusive) {
-					this.stampLearningBeat(beat);
-				}
-			}
-		}
+		});
 	}
 
-	private void stampLearningBeat(TGBeat beat) {
+	private void stampLearningBeat(TGBeat beat, long playPreciseStart) {
 		if (beat == null || beat.getMeasure() == null) {
 			return;
 		}
@@ -1168,18 +1220,23 @@ public class TGFretBoard {
 			}
 			Iterator<TGNote> it = voice.getNotes().iterator();
 			while (it.hasNext()) {
-				this.stampLearningNote(it.next(), track, keySignature, percussion);
+				this.stampLearningNote(it.next(), beat, playPreciseStart, track, keySignature, percussion);
 			}
 		}
 	}
 
-	private void stampLearningNote(TGNote note, TGTrack track, int keySignature, boolean percussion) {
+	private void stampLearningNote(TGNote note, TGBeat visitedBeat, long visitedPlayPrecise, TGTrack track, int keySignature, boolean percussion) {
 		TGNote chainStart = this.getTiedChainStart(note);
 		if (chainStart.getVoice() == null || chainStart.getVoice().getBeat() == null) {
 			return;
 		}
 		TGBeat startBeat = chainStart.getVoice().getBeat();
-		long preciseStart = this.beatPreciseStart(startBeat);
+		long scoreVisited = this.beatPreciseStart(visitedBeat);
+		long scoreChain = this.beatPreciseStart(startBeat);
+		long preciseStart = visitedPlayPrecise - (scoreVisited - scoreChain);
+		if (preciseStart < 0L) {
+			preciseStart = visitedPlayPrecise;
+		}
 		int fretIndex = chainStart.getValue();
 		int stringIndex = chainStart.getString() - 1;
 		if (fretIndex < 0 || fretIndex >= this.frets.length || stringIndex < 0 || stringIndex >= this.strings.length) {
