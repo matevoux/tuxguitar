@@ -1,6 +1,7 @@
 package app.tuxguitar.graphics.control;
 
 import java.util.Iterator;
+import java.util.List;
 
 import app.tuxguitar.graphics.control.painters.TGKeySignaturePainter;
 import app.tuxguitar.graphics.control.painters.TGNotePainter;
@@ -605,28 +606,15 @@ public class TGNoteImpl extends TGNote {
 		return null;
 	}
 
-	// >=2 bent notes on same beat?
-	// conflict if there is another bend with different value, or with higher string
-	// this way, if all values are identical then one does not raise conflict and is drawn
+	// hide amplitude text when another bent note sits on a higher string
 	private boolean multipleBendConflicts() {
 		TGVoice voice = getVoice();
 		Iterator<TGNote> it = voice.getNotes().iterator();
 		while(it.hasNext()){
 			TGNoteImpl note = (TGNoteImpl)it.next();
-			if (note.getEffect().isBend() && ((note.getString() < getString())
-					|| (note.getEffect().getBend().getMovements().size() !=0 && getEffect().getBend().getMovements().size()!=0
-					    && note.getEffect().getBend().getMovements().get(0) != getEffect().getBend().getMovements().get(0)))) return true;
-		}
-		return false;
-	}
-	// another possible bend conflict: releasing while playing a note on a higher string / releasing from string 1
-	private boolean bendReleaseConflicts()  {
-		if (getString()==1) return true;
-		TGVoice voice = getVoice();
-		Iterator<TGNote> it = voice.getNotes().iterator();
-		while(it.hasNext()){
-			TGNoteImpl note = (TGNoteImpl)it.next();
-			if (note.getString() < getString()) return true;
+			if (note.getEffect().isBend() && note.getString() < getString()) {
+				return true;
+			}
 		}
 		return false;
 	}
@@ -659,138 +647,87 @@ public class TGNoteImpl extends TGNote {
 	}
 
 	public float getEffectWidth(TGLayout layout) {
-		if (getEffect().isBend()) return getBendWidth(layout, getEffect().getBend());
-		return(0.0f);
+		// Bend curves use the note duration width; they no longer add extra spacing.
+		return 0.0f;
 	}
 
-	private float getBendWidth(TGLayout layout, TGEffectBend bend) {
-		return paintBend(layout, null, 0.0f, 0.0f, new UIInset() , bend);
-	}
-
-	private float paintBend(TGLayout layout,UIPainter painter,float fromX,float fromY, UIInset margin, TGEffectBend bend){
+	private void paintBend(TGLayout layout,UIPainter painter,float fromX,float fromY, UIInset margin, TGEffectBend bend){
 		// fromX, fromY: top-left corner of drawing zone in current measure
-		float scale = layout.getScale();
-		float ARROW_WIDTH = 10.0f * scale;
-		String sAmplitude[] = { "", "1/4", "1/2", "3/4", "1", "1\u00BC", "1\u00BD", "1\u00BE", "2", "2\u00BC", "2\u00BD", "2\u00BE", "3" };
-		boolean compactMode = getMeasureImpl().getCompactMode();
-		boolean canPaint = (painter != null);
-
-		// x
-		float bendWidth = 0.0f;
-		float width = ( getVoiceImpl().getWidth() - (2.0f * scale) );
-		float xLeft   = fromX + getPosX() - margin.getLeft() - (4.0f * scale);	// start of hold
-		float xCenter = fromX + getPosX();
-		float xRight  = fromX + getPosX() + margin.getRight() + 1.0f * scale;	// start of bend
-		float xMax    = fromX + getPosX() + width - (8.0f * scale)	;	// end of hold
-		// y
 		TGSpacing ts = getMeasureImpl().getTs();
-		float yAmplitude = 0.0f;
-		float yLow = 0.0f;
-		float yMiddle = 0.0f;
-		float yHigh = 0.0f;
-		if (ts==null || painter==null) {
-			// this case can occur when function is called not to paint, but just to compute spacing
-			canPaint = false;
-		} else {
-			yAmplitude = fromY + ts.getPosition(TGTrackSpacing.POSITION_BEND);
-			yHigh = yAmplitude  + 8.0f * scale;	// high position of arrows (bend/release), or dashed line (hold)
-			yLow = fromY + getPaintPosition(TGTrackSpacing.POSITION_TABLATURE) + getTabPosY();	// start of arrow (bend)
-			yMiddle = yLow - 6.0f*scale;
+		if (ts == null || painter == null) {
+			return;
 		}
 
-		if (bend.getMovements().size() == 0) {
-			// draw hold
-			if (canPaint)  {
-				painter.initPath();
-				float xHold = xLeft;
-				float xStep = 2.5f*scale;
-				while (xHold < xMax)  {
-					painter.moveTo( xHold, yHigh);
-					painter.lineTo( xHold + xStep , yHigh);
-					painter.moveTo( xHold + 2*xStep, yHigh);
-					painter.lineTo( xHold + 3*xStep, yHigh);
-					xHold += 4*xStep;
-				}
-				painter.closePath();
-			}
-			return bendWidth;
+		float scale = layout.getScale();
+		float width = ( getVoiceImpl().getWidth() - (2.0f * scale) );
+
+		TGBendPath.Geometry geometry = new TGBendPath.Geometry();
+		geometry.xStart = fromX + getPosX() + margin.getRight() + 1.0f * scale;
+		geometry.xEnd = fromX + getPosX() + width - (8.0f * scale);
+		geometry.yLabel = fromY + ts.getPosition(TGTrackSpacing.POSITION_BEND);
+		geometry.yFull = geometry.yLabel + 8.0f * scale;
+		geometry.yOpen = fromY + getPaintPosition(TGTrackSpacing.POSITION_TABLATURE) + getTabPosY() - (2.0f * scale);
+		geometry.scale = scale;
+
+		List<TGBendPath.Segment> segments = TGBendPath.build(bend.getPoints(), geometry);
+		if (segments.isEmpty()) {
+			return;
 		}
-		// at least one movement (bend or release)
-		float x0 = xRight;
-		boolean isFirstMovement = true;
-		for (int movement : bend.getMovements()) {
-			float y0 = yLow;
-			float y1 = yHigh;
-			float bendDirection = 1.0f;
-			float x1 = 0.0f;
-			if (movement < 0) {
-				// release (warning, possible conflict with note played on higher string)
-				if (compactMode && !bendReleaseConflicts())  {
-					x0 = xCenter - (3.0f * scale);
-					y1 = yMiddle;
-				} else {
-					y1 = yLow;
-				}
-				y0 = yHigh;
-				bendDirection = -1.0f;
+
+		boolean hideLabels = multipleBendConflicts();
+		for (TGBendPath.Segment segment : segments) {
+			layout.setTabEffectStyle(painter);
+			painter.setLineWidth(layout.getLineWidth(1));
+			painter.initPath();
+			if (segment.isPreBend()) {
+				painter.moveTo(segment.getFrom().getX(), geometry.yOpen);
+				painter.lineTo(segment.getFrom().getX(), segment.getFrom().getY());
+				paintBendArrow(painter, segment.getFrom().getX(), segment.getFrom().getY(), scale, 1.0f);
 			}
-			// draw 1st part of arrow
-			if (canPaint)  {
-				layout.setTabEffectStyle(painter);
-				painter.setLineWidth(layout.getLineWidth(1));
-				painter.initPath();
-				// pre-bend arrow
-				if (!compactMode && isFirstMovement && movement<0)  {
-					painter.moveTo( x0, y0 );
-					painter.lineTo( x0, y1 );
-					painter.moveTo( x0, y0);
-					painter.lineTo( x0 - (2.0f * scale), y0 + 2.0f * scale);
-					painter.moveTo( x0, y0);
-					painter.lineTo( x0 + (2.0f * scale), y0 + 2.0f * scale);
-				}
-				painter.moveTo( x0, y0 );
-				painter.lineTo( x0 + (1.0f * scale), y0 );
-			}
-			// 2nd part of arrow: different width whether compactMode or not -> update bendSpacing
-			if (compactMode) {
-				x1 = x0 + (3.0f * scale);
-				if (canPaint)  {
-					painter.cubicTo(x0 + (1.0f * scale), y0,
-									x0 + (3.0f * scale), y0,
-									x0 + (3.0f * scale), y0 - 2.0f * bendDirection * scale);
-					painter.moveTo( x0 + (3.0f * scale), y0 - 2.0f * bendDirection * scale);
-					painter.lineTo( x0 + (3.0f * scale), y1);
-				}
+			painter.moveTo(segment.getFrom().getX(), segment.getFrom().getY());
+			if (segment.getKind() == TGBendPath.SegmentKind.HOLD || segment.getTo().getX() == segment.getFrom().getX()) {
+				painter.lineTo(segment.getTo().getX(), segment.getTo().getY());
 			} else {
-				x1 = x0 + ARROW_WIDTH;
-				bendWidth += ARROW_WIDTH;
-				if (canPaint)  {
-					painter.cubicTo(x0 + (1.0f * scale), y0,     x1, y0,    x1 , y1);
+				float dx = segment.getTo().getX() - segment.getFrom().getX();
+				painter.cubicTo(
+					segment.getFrom().getX() + 0.4f * dx, segment.getFrom().getY(),
+					segment.getTo().getX() - 0.4f * dx, segment.getTo().getY(),
+					segment.getTo().getX(), segment.getTo().getY());
+			}
+			if (segment.isArrowAtEnd()) {
+				float direction = (segment.getKind() == TGBendPath.SegmentKind.RELEASE) ? -1.0f : 1.0f;
+				paintBendArrow(painter, segment.getTo().getX(), segment.getTo().getY(), scale, direction);
+			}
+			painter.closePath();
+			if (!hideLabels) {
+				if (segment.isPreBend()) {
+					paintBendAmplitude(layout, painter, segment.getFrom().getValue(), segment.getFrom().getX(), geometry);
+				}
+				if (segment.isLabelAtEnd()) {
+					paintBendAmplitude(layout, painter, segment.getTo().getValue(), segment.getTo().getX(), geometry);
 				}
 			}
-			// 3rd part of arrow (head) + amplitude
-			if (canPaint)  {
-				painter.moveTo( x1, y1);
-				painter.lineTo( x1 - (2.0f * scale), y1 + 2.0f * bendDirection * scale);
-				painter.moveTo( x1, y1);
-				painter.lineTo( x1 + (2.0f * scale), y1 + 2.0f * bendDirection * scale);
-				painter.closePath();
-				// amplitude
-				if (!multipleBendConflicts() && (movement>0 || isFirstMovement))  {
-					String amplitude = "";
-					float xAmplitude = (movement > 0 ? x1 : x0);
-					if (movement<0) movement = -movement;
-					if (movement % 4 != 0) xAmplitude -= 4.0f * scale;	// left shift except for short strings (n*full)
-					if (movement < sAmplitude.length) amplitude = sAmplitude[movement];
-					layout.setOfflineEffectStyle(painter);
-					painter.drawString(amplitude, xAmplitude, yAmplitude + painter.getFMTopLine());
-				}
-			}
-			if (compactMode) break;
-			isFirstMovement = false;
-			x0 = x1;
 		}
-		return(bendWidth);
+	}
+
+	private void paintBendArrow(UIPainter painter, float x, float y, float scale, float direction) {
+		painter.moveTo(x, y);
+		painter.lineTo(x - (2.0f * scale), y + 2.0f * scale * direction);
+		painter.moveTo(x, y);
+		painter.lineTo(x + (2.0f * scale), y + 2.0f * scale * direction);
+	}
+
+	private void paintBendAmplitude(TGLayout layout, UIPainter painter, int value, float xAnchor, TGBendPath.Geometry geometry) {
+		String amplitude = TGBendPath.amplitudeLabel(value);
+		if (amplitude.isEmpty()) {
+			return;
+		}
+		float xAmplitude = xAnchor;
+		if (value % 4 != 0) {
+			xAmplitude -= 4.0f * geometry.scale;
+		}
+		layout.setOfflineEffectStyle(painter);
+		painter.drawString(amplitude, xAmplitude, geometry.yLabel + painter.getFMTopLine());
 	}
 
 	private void paintTremoloBar(TGLayout layout,UIPainter painter,float fromX,float fromY){
