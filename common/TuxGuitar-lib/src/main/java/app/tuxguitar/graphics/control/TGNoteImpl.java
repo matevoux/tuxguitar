@@ -664,11 +664,11 @@ public class TGNoteImpl extends TGNote {
 		}
 
 		float scale = layout.getScale();
-		float voiceWidth = getVoiceImpl().getWidth();
+		float noteX = fromX + getPosX();
 
 		TGBendPath.Geometry geometry = new TGBendPath.Geometry();
-		geometry.xStart = fromX + getPosX() + margin.getRight() + 1.0f * scale;
-		geometry.xEnd = fromX + getPosX() + voiceWidth - (2.0f * scale);
+		geometry.xStart = noteX;
+		geometry.xEnd = bendEndX(layout, fromX, noteX, scale);
 		geometry.yLabel = fromY + ts.getPosition(TGTrackSpacing.POSITION_BEND);
 		geometry.yFull = geometry.yLabel + 8.0f * scale;
 		geometry.yOpen = fromY + getPaintPosition(TGTrackSpacing.POSITION_TABLATURE) + getTabPosY() - (2.0f * scale);
@@ -687,13 +687,19 @@ public class TGNoteImpl extends TGNote {
 			if (segment.isPreBend()) {
 				painter.moveTo(segment.getFrom().getX(), geometry.yOpen);
 				painter.lineTo(segment.getFrom().getX(), segment.getFrom().getY());
-				paintBendArrow(painter, segment.getFrom().getX(), segment.getFrom().getY(), scale, 1.0f);
+				paintBendArrow(painter, segment.getFrom().getX(), segment.getFrom().getY(), scale, 0.0f, -1.0f);
 			}
 			painter.moveTo(segment.getFrom().getX(), segment.getFrom().getY());
-			painter.lineTo(segment.getTo().getX(), segment.getTo().getY());
+			if (segment.isArc()) {
+				for (TGBendPath.Cubic cubic : segment.getCubics()) {
+					painter.cubicTo(cubic.getC1x(), cubic.getC1y(), cubic.getC2x(), cubic.getC2y(), cubic.getX(), cubic.getY());
+				}
+			} else {
+				painter.lineTo(segment.getTo().getX(), segment.getTo().getY());
+			}
 			if (segment.isArrowAtEnd()) {
-				float direction = (segment.getKind() == TGBendPath.SegmentKind.RELEASE) ? -1.0f : 1.0f;
-				paintBendArrow(painter, segment.getTo().getX(), segment.getTo().getY(), scale, direction);
+				paintBendArrow(painter, segment.getTo().getX(), segment.getTo().getY(), scale,
+					segment.getEndTangentX(), segment.getEndTangentY());
 			}
 			painter.closePath();
 			if (!hideLabels) {
@@ -707,11 +713,41 @@ public class TGNoteImpl extends TGNote {
 		}
 	}
 
-	private void paintBendArrow(UIPainter painter, float x, float y, float scale, float direction) {
+	private float bendEndX(TGLayout layout, float fromX, float noteX, float scale) {
+		TGNoteImpl nextNote = (TGNoteImpl) layout.getSongManager().getMeasureManager().getNextNote(
+			getMeasureImpl(), getBeatImpl().getStart(), getVoice().getIndex(), getString());
+		if (nextNote != null) {
+			float fromXtab = fromX - getBeatImpl().getSpacing(layout);
+			float nextX = fromXtab + nextNote.getPosX() + nextNote.getBeatImpl().getSpacing(layout);
+			if (nextX > noteX + scale) {
+				return nextX;
+			}
+		}
+		float span = getVoiceImpl().getWidth() - (2.0f * scale);
+		float minWidth = TGBendPath.minimumWidth(scale);
+		if (span < minWidth) {
+			span = minWidth;
+		}
+		return noteX + span;
+	}
+
+	private void paintBendArrow(UIPainter painter, float x, float y, float scale, float tangentX, float tangentY) {
+		float length = (float) Math.sqrt(tangentX * tangentX + tangentY * tangentY);
+		float nx = 0.0f;
+		float ny = -1.0f;
+		if (length > 1.0e-6f) {
+			nx = tangentX / length;
+			ny = tangentY / length;
+		}
+		float size = 2.0f * scale;
+		float bx = -nx * size;
+		float by = -ny * size;
+		float px = -ny * size;
+		float py = nx * size;
 		painter.moveTo(x, y);
-		painter.lineTo(x - (2.0f * scale), y + 2.0f * scale * direction);
+		painter.lineTo(x + bx + px, y + by + py);
 		painter.moveTo(x, y);
-		painter.lineTo(x + (2.0f * scale), y + 2.0f * scale * direction);
+		painter.lineTo(x + bx - px, y + by - py);
 	}
 
 	private void paintBendAmplitude(TGLayout layout, UIPainter painter, int value, float xAnchor, TGBendPath.Geometry geometry) {

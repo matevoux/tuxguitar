@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import app.tuxguitar.graphics.control.TGBendPath.Segment;
 import app.tuxguitar.graphics.control.TGBendPath.SegmentKind;
+import app.tuxguitar.graphics.control.TGBendPath.Vertex;
 import app.tuxguitar.song.factory.TGFactory;
 import app.tuxguitar.song.models.effects.TGEffectBend;
 
@@ -47,8 +48,8 @@ public class TestTGBendPath {
 		assertEquals(SegmentKind.HOLD, segments.get(1).getKind());
 		assertFalse(segments.get(0).isPreBend());
 		assertEquals(160f, segments.get(0).getTo().getX(), EPS);
-		assertEquals(60f, segments.get(1).getFrom().getY(), EPS);
-		assertEquals(60f, segments.get(1).getTo().getY(), EPS);
+		assertEquals(20f, segments.get(1).getFrom().getY(), EPS);
+		assertEquals(20f, segments.get(1).getTo().getY(), EPS);
 		assertTrue(segments.get(0).isArrowAtEnd());
 		assertTrue(segments.get(0).isLabelAtEnd());
 	}
@@ -72,8 +73,8 @@ public class TestTGBendPath {
 		assertEquals(1, segments.size());
 		assertEquals(SegmentKind.HOLD, segments.get(0).getKind());
 		assertTrue(segments.get(0).isPreBend());
-		assertEquals(60f, segments.get(0).getFrom().getY(), EPS);
-		assertEquals(60f, segments.get(0).getTo().getY(), EPS);
+		assertEquals(20f, segments.get(0).getFrom().getY(), EPS);
+		assertEquals(20f, segments.get(0).getTo().getY(), EPS);
 		assertFalse(segments.get(0).isLabelAtEnd());
 	}
 
@@ -91,7 +92,7 @@ public class TestTGBendPath {
 
 	@Test
 	public void testCoordinatesFollowDialogGrid() {
-		List<Segment> segments = TGBendPath.build(bend(0, 0, 3, 6, 12, 6).getPoints(), geometry());
+		List<Segment> segments = TGBendPath.build(bend(0, 0, 3, 2, 12, 2).getPoints(), geometry());
 
 		assertEquals(2, segments.size());
 		assertEquals(130f, segments.get(0).getTo().getX(), EPS);
@@ -104,6 +105,41 @@ public class TestTGBendPath {
 	public void testMinimumWidthCoversDialogPositions() {
 		assertEquals(12 * 8.0f, TGBendPath.minimumWidth(1f), EPS);
 		assertEquals(12 * 16.0f, TGBendPath.minimumWidth(2f), EPS);
+	}
+
+	@Test
+	public void testRiseUsesCircularArc() {
+		List<Segment> segments = TGBendPath.build(bend(0, 0, 6, 4, 12, 4).getPoints(), geometry());
+
+		assertTrue(segments.get(0).isArc());
+		assertFalse(segments.get(1).isArc());
+		assertEquals(0, segments.get(1).getCubics().size());
+
+		Segment rise = segments.get(0);
+		float dxFrom = rise.getFrom().getX() - rise.getCenterX();
+		float dyFrom = rise.getFrom().getY() - rise.getCenterY();
+		float dxTo = rise.getTo().getX() - rise.getCenterX();
+		float dyTo = rise.getTo().getY() - rise.getCenterY();
+		assertEquals(rise.getRadius(), (float) Math.sqrt(dxFrom * dxFrom + dyFrom * dyFrom), 0.5f);
+		assertEquals(rise.getRadius(), (float) Math.sqrt(dxTo * dxTo + dyTo * dyTo), 0.5f);
+
+		Vertex mid = rise.getArcMidpoint();
+		float dxMid = mid.getX() - rise.getCenterX();
+		float dyMid = mid.getY() - rise.getCenterY();
+		assertEquals(rise.getRadius(), (float) Math.sqrt(dxMid * dxMid + dyMid * dyMid), 0.5f);
+
+		TGBendPath.Cubic last = rise.getCubics().get(rise.getCubics().size() - 1);
+		assertEquals(rise.getTo().getX(), last.getX(), EPS);
+		assertEquals(rise.getTo().getY(), last.getY(), EPS);
+	}
+
+	@Test
+	public void testHoldHasNoArc() {
+		List<Segment> segments = TGBendPath.build(bend(0, 4, 12, 4).getPoints(), geometry());
+
+		assertEquals(1, segments.size());
+		assertFalse(segments.get(0).isArc());
+		assertTrue(segments.get(0).getCubics().isEmpty());
 	}
 
 	@Test
