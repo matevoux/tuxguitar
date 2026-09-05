@@ -47,8 +47,8 @@ public class TestTGBendPath {
 		assertEquals(SegmentKind.HOLD, segments.get(1).getKind());
 		assertFalse(segments.get(0).isPreBend());
 		assertEquals(160f, segments.get(0).getTo().getX(), EPS);
-		assertEquals(20f, segments.get(1).getFrom().getY(), EPS);
-		assertEquals(20f, segments.get(1).getTo().getY(), EPS);
+		assertEquals(60f, segments.get(1).getFrom().getY(), EPS);
+		assertEquals(60f, segments.get(1).getTo().getY(), EPS);
 		assertTrue(segments.get(0).isArrowAtEnd());
 		assertTrue(segments.get(0).isLabelAtEnd());
 	}
@@ -72,8 +72,8 @@ public class TestTGBendPath {
 		assertEquals(1, segments.size());
 		assertEquals(SegmentKind.HOLD, segments.get(0).getKind());
 		assertTrue(segments.get(0).isPreBend());
-		assertEquals(20f, segments.get(0).getFrom().getY(), EPS);
-		assertEquals(20f, segments.get(0).getTo().getY(), EPS);
+		assertEquals(60f, segments.get(0).getFrom().getY(), EPS);
+		assertEquals(60f, segments.get(0).getTo().getY(), EPS);
 		assertFalse(segments.get(0).isLabelAtEnd());
 	}
 
@@ -87,6 +87,23 @@ public class TestTGBendPath {
 		assertEquals(SegmentKind.HOLD, segments.get(1).getKind());
 		assertEquals(100f, segments.get(0).getFrom().getX(), EPS);
 		assertEquals(220f, segments.get(1).getTo().getX(), EPS);
+	}
+
+	@Test
+	public void testCoordinatesFollowDialogGrid() {
+		List<Segment> segments = TGBendPath.build(bend(0, 0, 3, 6, 12, 6).getPoints(), geometry());
+
+		assertEquals(2, segments.size());
+		assertEquals(130f, segments.get(0).getTo().getX(), EPS);
+		assertEquals(50f, segments.get(0).getTo().getY(), EPS);
+		assertEquals(220f, segments.get(1).getTo().getX(), EPS);
+		assertEquals(50f, segments.get(1).getTo().getY(), EPS);
+	}
+
+	@Test
+	public void testMinimumWidthCoversDialogPositions() {
+		assertEquals(12 * 8.0f, TGBendPath.minimumWidth(1f), EPS);
+		assertEquals(12 * 16.0f, TGBendPath.minimumWidth(2f), EPS);
 	}
 
 	@Test

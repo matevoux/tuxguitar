@@ -647,8 +647,13 @@ public class TGNoteImpl extends TGNote {
 	}
 
 	public float getEffectWidth(TGLayout layout) {
-		// Bend curves use the note duration width; they no longer add extra spacing.
-		return 0.0f;
+		if (!getEffect().isBend()) {
+			return 0.0f;
+		}
+		float minWidth = TGBendPath.minimumWidth(layout.getScale());
+		float durationWidth = layout.getDurationWidth(getVoiceImpl().getDuration());
+		float extra = minWidth - durationWidth;
+		return (extra > 0.0f ? extra : 0.0f);
 	}
 
 	private void paintBend(TGLayout layout,UIPainter painter,float fromX,float fromY, UIInset margin, TGEffectBend bend){
@@ -659,11 +664,11 @@ public class TGNoteImpl extends TGNote {
 		}
 
 		float scale = layout.getScale();
-		float width = ( getVoiceImpl().getWidth() - (2.0f * scale) );
+		float voiceWidth = getVoiceImpl().getWidth();
 
 		TGBendPath.Geometry geometry = new TGBendPath.Geometry();
 		geometry.xStart = fromX + getPosX() + margin.getRight() + 1.0f * scale;
-		geometry.xEnd = fromX + getPosX() + width - (8.0f * scale);
+		geometry.xEnd = fromX + getPosX() + voiceWidth - (2.0f * scale);
 		geometry.yLabel = fromY + ts.getPosition(TGTrackSpacing.POSITION_BEND);
 		geometry.yFull = geometry.yLabel + 8.0f * scale;
 		geometry.yOpen = fromY + getPaintPosition(TGTrackSpacing.POSITION_TABLATURE) + getTabPosY() - (2.0f * scale);
@@ -685,15 +690,7 @@ public class TGNoteImpl extends TGNote {
 				paintBendArrow(painter, segment.getFrom().getX(), segment.getFrom().getY(), scale, 1.0f);
 			}
 			painter.moveTo(segment.getFrom().getX(), segment.getFrom().getY());
-			if (segment.getKind() == TGBendPath.SegmentKind.HOLD || segment.getTo().getX() == segment.getFrom().getX()) {
-				painter.lineTo(segment.getTo().getX(), segment.getTo().getY());
-			} else {
-				float dx = segment.getTo().getX() - segment.getFrom().getX();
-				painter.cubicTo(
-					segment.getFrom().getX() + 0.4f * dx, segment.getFrom().getY(),
-					segment.getTo().getX() - 0.4f * dx, segment.getTo().getY(),
-					segment.getTo().getX(), segment.getTo().getY());
-			}
+			painter.lineTo(segment.getTo().getX(), segment.getTo().getY());
 			if (segment.isArrowAtEnd()) {
 				float direction = (segment.getKind() == TGBendPath.SegmentKind.RELEASE) ? -1.0f : 1.0f;
 				paintBendArrow(painter, segment.getTo().getX(), segment.getTo().getY(), scale, direction);

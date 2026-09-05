@@ -14,6 +14,8 @@ import app.tuxguitar.song.models.effects.TGEffectBend.BendPoint;
 public final class TGBendPath {
 
 	public static final int VALUE_FULL_TONE = 4;
+	/** Horizontal pixels per dialog time unit (0..12), so timing stays readable. */
+	public static final float WIDTH_PER_POSITION = 8.0f;
 
 	private static final String[] AMPLITUDE = {
 		"", "1/4", "1/2", "3/4", "1",
@@ -111,6 +113,10 @@ public final class TGBendPath {
 		}
 	}
 
+	public static float minimumWidth(float scale) {
+		return TGEffectBend.MAX_POSITION_LENGTH * WIDTH_PER_POSITION * scale;
+	}
+
 	public static String amplitudeLabel(int value) {
 		if (value <= 0 || value >= AMPLITUDE.length) {
 			return "";
@@ -133,8 +139,9 @@ public final class TGBendPath {
 		}
 
 		float usableWidth = geometry.xEnd - geometry.xStart;
-		if (usableWidth < 3.0f * geometry.scale) {
-			usableWidth = 3.0f * geometry.scale;
+		float minWidth = minimumWidth(geometry.scale);
+		if (usableWidth < minWidth) {
+			usableWidth = minWidth;
 		}
 
 		List<Vertex> vertices = new ArrayList<Vertex>();
@@ -214,7 +221,7 @@ public final class TGBendPath {
 		if (span <= 0) {
 			return geometry.yOpen;
 		}
-		float t = value / (float) VALUE_FULL_TONE;
+		float t = value / (float) TGEffectBend.MAX_VALUE_LENGTH;
 		if (t < 0f) {
 			t = 0f;
 		}
