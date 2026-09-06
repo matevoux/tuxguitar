@@ -16,7 +16,31 @@ on: [push]
 #    branches: [ "master" ]
 
 jobs:
+  skip-check:
+    name: Skip merge-commit on master
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - name: Detect master merge commit
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" = "refs/heads/master" ]; then
+            parents="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}" --jq '.parents | length')"
+            if [ "${parents}" -ge 2 ]; then
+              echo "skip=true" >> "${GITHUB_OUTPUT}"
+              echo "Merge commit on master: skip Ubuntu CI (see master-prerelease.yml)"
+              exit 0
+            fi
+          fi
+          echo "skip=false" >> "${GITHUB_OUTPUT}"
+
   build-ubuntu-latest:
+    needs: skip-check
+    if: needs.skip-check.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v5
