@@ -1,0 +1,248 @@
+# Pre-release on merge into master (git merge / GitHub merge commit).
+# Tests first, then bump tuxguitar-matevoux-<version>-devel.N, then Linux SWT
+# .deb + .tar.gz, then publish a GitHub pre-release.
+
+name: Master merge pre-release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: master-prerelease
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    name: Check merge commit
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - name: Run only on merge commits or manual dispatch
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            echo "workflow_dispatch: publishing from ${GITHUB_SHA}"
+            exit 0
+          fi
+          parents="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}" --jq '.parents | length')"
+          if [ "${parents}" -ge 2 ]; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            echo "Merge commit (${parents} parents): ${GITHUB_SHA}"
+          else
+            echo "run=false" >> "${GITHUB_OUTPUT}"
+            echo "Not a merge commit (${parents} parent(s)): skip pre-release"
+          fi
+
+  test:
+    name: Unit tests
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
+          mvn -B -f common/TuxGuitar-lib/pom.xml install
+          mvn -B -f common/TuxGuitar-gm-utils/pom.xml install
+          mvn -B -f common/TuxGuitar-compat/pom.xml test
+          mvn -B -f common/TuxGuitar-editor-utils/pom.xml test
+          mvn -B -f common/TuxGuitar-midi/pom.xml test
+
+  build:
+    name: Linux SWT packages
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      base: ${{ steps.version.outputs.base }}
+      next: ${{ steps.version.outputs.next }}
+      packaged: ${{ steps.package.outputs.packaged }}
+      target_sha: ${{ steps.commit_changelog.outputs.target_sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget unzip git build-essential default-jdk maven fakeroot \
+            libwebkit2gtk-4.1-0 libfluidsynth-dev libjack-jackd2-dev libasound2-dev \
+            liblilv-dev libsuil-dev qtbase5-dev
+      - name: Download SWT
+        run: curl -fsSL -o swt-4.37-gtk-linux-`uname -m`.zip https://archive.eclipse.org/eclipse/downloads/drops4/R-4.37-202509050730/swt-4.37-gtk-linux-`uname -m`.zip
+      - name: Install SWT
+        run: |
+          set -euo pipefail
+          mkdir swt-4.37-gtk-linux-`uname -m`
+          unzip -q swt-4.37-gtk-linux-`uname -m`.zip -d swt-4.37-gtk-linux-`uname -m`
+          mvn -B install:install-file \
+            -Dfile=swt-4.37-gtk-linux-`uname -m`/swt.jar \
+            -DgroupId=org.eclipse.swt \
+            -DartifactId=org.eclipse.swt.gtk.linux \
+            -Dpackaging=jar \
+            -Dversion=4.37
+      - name: Compute devel version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BASE="$(grep 'CURRENT = new TGVersion' common/TuxGuitar-lib/src/main/java/app/tuxguitar/util/TGVersion.java \
+            | awk -F '[(,)]' '{ print $2"."$3"."$4 }' | tr -d '[:space:]')"
+          if [ -z "${BASE}" ]; then
+            echo "Could not read TGVersion.CURRENT" >&2
+            exit 1
+          fi
+          PREFIX="tuxguitar-matevoux-${BASE}-devel."
+          MAX=0
+          while IFS= read -r ref; do
+            [ -z "${ref}" ] && continue
+            tag="${ref#refs/tags/}"
+            n="${tag##*devel.}"
+            case "${n}" in
+              ''|*[!0-9]*) continue ;;
+            esac
+            if [ "${n}" -gt "${MAX}" ]; then
+              MAX="${n}"
+            fi
+          done < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${PREFIX}" --jq '.[].ref' || true)
+          NEXT=$((MAX + 1))
+          MVN_VERSION="matevoux-${BASE}-devel.${NEXT}"
+          RELEASE_TAG="tuxguitar-matevoux-${BASE}-devel.${NEXT}"
+          {
+            echo "base=${BASE}"
+            echo "next=${NEXT}"
+            echo "mvn_version=${MVN_VERSION}"
+            echo "release_tag=${RELEASE_TAG}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Next pre-release: ${RELEASE_TAG} (Maven version ${MVN_VERSION})"
+      - name: Update CHANGELOG
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          MERGE_SUBJECT="$(git log -1 --format=%s "${GITHUB_SHA}")"
+          if [ -z "${MERGE_SUBJECT}" ]; then
+            MERGE_SUBJECT="${GITHUB_SHA}"
+          fi
+          tmp="$(mktemp)"
+          touch CHANGELOG
+          {
+            printf '%s\n%s\n\n' "${RELEASE_TAG}" "${MERGE_SUBJECT}"
+            cat CHANGELOG
+          } > "${tmp}"
+          mv "${tmp}" CHANGELOG
+          echo "CHANGELOG entry:"
+          printf '%s\n%s\n' "${RELEASE_TAG}" "${MERGE_SUBJECT}"
+      - name: Apply version in workspace
+        run: |
+          set -euo pipefail
+          TGDEVVER='9.99-SNAPSHOT'
+          TGVERSION='${{ steps.version.outputs.mvn_version }}'
+          find . \( -name "*.xml" -or -name "*.properties" -or -name init.js -or -name control -or -name Info.plist -or -name CHANGES \) \
+            -and -not -path "./website/*" -and -type f \
+            -exec sed -i -e "s/${TGDEVVER//./\\.}/${TGVERSION}/g" '{}' \;
+          sed -i -e "s/static final String RELEASE_NAME =.*/static final String RELEASE_NAME = (TGApplication.NAME + \" ${TGVERSION}\");/" \
+            desktop/TuxGuitar/src/app/tuxguitar/app/view/dialog/about/TGAboutDialog.java
+          echo "${TGVERSION}" > .build-version
+      - name: Build Linux SWT deb (includes tgz tree)
+        run: |
+          set -euo pipefail
+          cd desktop/build-scripts/tuxguitar-linux-swt-deb
+          mvn -B -e clean verify -P native-modules
+      - name: Package deb, tar.gz and checksums
+        id: package
+        run: |
+          set -euo pipefail
+          ARCH="$(dpkg --print-architecture)"
+          MVN_VERSION='${{ steps.version.outputs.mvn_version }}'
+          RELEASE_TAG='${{ steps.version.outputs.release_tag }}'
+          DEB="desktop/build-scripts/tuxguitar-linux-swt-deb/target/tuxguitar-${MVN_VERSION}-linux-swt.deb"
+          SWT_DIR="desktop/build-scripts/tuxguitar-linux-swt/target/tuxguitar-${MVN_VERSION}-linux-swt"
+          test -f "${DEB}"
+          test -d "${SWT_DIR}"
+          mkdir -p dist
+          PACKAGED="${RELEASE_TAG}-linux-swt-${ARCH}"
+          cp "${DEB}" "dist/${PACKAGED}.deb"
+          mv "${SWT_DIR}" "desktop/build-scripts/tuxguitar-linux-swt/target/${PACKAGED}"
+          tar --owner=root --group=root -czf "dist/${PACKAGED}.tar.gz" \
+            -C desktop/build-scripts/tuxguitar-linux-swt/target \
+            "${PACKAGED}"
+          cp CHANGELOG "dist/${RELEASE_TAG}.CHANGELOG"
+          (cd dist && sha256sum "${PACKAGED}.deb" "${PACKAGED}.tar.gz" > "${RELEASE_TAG}.sha256")
+          echo "packaged=${PACKAGED}" >> "${GITHUB_OUTPUT}"
+          ls -l dist
+      - name: Commit CHANGELOG
+        id: commit_changelog
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG
+          git commit -m "changelog: ${RELEASE_TAG}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "target_sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: GitHub pre-release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: dist
+      - name: Create pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+          BASE: ${{ needs.build.outputs.base }}
+          NEXT: ${{ needs.build.outputs.next }}
+          PACKAGED: ${{ needs.build.outputs.packaged }}
+          TARGET_SHA: ${{ needs.build.outputs.target_sha }}
+        run: |
+          set -euo pipefail
+          gh release create "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${TARGET_SHA}" \
+            --prerelease \
+            --latest=false \
+            --title "${RELEASE_TAG}" \
+            --notes "Pre-release matevoux ${BASE}-devel.${NEXT} (merge into master)." \
+            "dist/${PACKAGED}.deb" \
+            "dist/${PACKAGED}.tar.gz" \
+            "dist/${RELEASE_TAG}.CHANGELOG" \
+            "dist/${RELEASE_TAG}.sha256"
