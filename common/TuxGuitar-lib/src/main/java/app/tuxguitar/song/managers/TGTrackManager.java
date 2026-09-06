@@ -116,6 +116,37 @@ public class TGTrackManager {
 		return (previousVoice);
 	}
 
+	public TGVoice getNextVoice(TGVoice voice) {
+		TGVoice nextVoice = getSongManager().getMeasureManager().getNextVoice(
+				voice.getBeat().getMeasure().getBeats(), voice.getBeat(), voice.getIndex());
+		if (nextVoice == null) {
+			TGMeasure nextMeasure = getNextMeasure(voice.getBeat().getMeasure());
+			if (nextMeasure == null) {
+				return null;
+			}
+			nextVoice = getSongManager().getMeasureManager().getFirstVoice(
+					nextMeasure.getBeats(), voice.getIndex());
+		}
+		return nextVoice;
+	}
+
+	public TGNote getNextSameStringNote(TGNote note) {
+		if (note == null) {
+			return null;
+		}
+		int string = note.getString();
+		TGVoice next = getNextVoice(note.getVoice());
+		while (next != null) {
+			for (TGNote candidate : next.getNotes()) {
+				if (candidate.getString() == string) {
+					return candidate;
+				}
+			}
+			next = getNextVoice(next);
+		}
+		return null;
+	}
+
 	public void fixInvalidTiedNotes(TGTrack track) {
 		TGMeasureManager measureManager = getSongManager().getMeasureManager();
 		Iterator<TGMeasure> itMeasure = track.getMeasures();

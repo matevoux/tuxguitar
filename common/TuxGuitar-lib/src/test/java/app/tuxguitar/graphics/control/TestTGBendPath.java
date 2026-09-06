@@ -12,6 +12,7 @@ import app.tuxguitar.graphics.control.TGBendPath.Segment;
 import app.tuxguitar.graphics.control.TGBendPath.SegmentKind;
 import app.tuxguitar.graphics.control.TGBendPath.Vertex;
 import app.tuxguitar.song.factory.TGFactory;
+import app.tuxguitar.song.models.TGNote;
 import app.tuxguitar.song.models.effects.TGEffectBend;
 
 public class TestTGBendPath {
@@ -149,5 +150,85 @@ public class TestTGBendPath {
 		assertEquals("1/4", TGBendPath.amplitudeLabel(1));
 		assertEquals("", TGBendPath.amplitudeLabel(0));
 		assertEquals("", TGBendPath.amplitudeLabel(13));
+	}
+
+	@Test
+	public void testTiedNoteHasNoPreBendStroke() {
+		List<Segment> segments = TGBendPath.build(bend(0, 4, 4, 4, 8, 0, 12, 0).getPoints(), geometry(), false);
+
+		assertEquals(3, segments.size());
+		assertEquals(SegmentKind.HOLD, segments.get(0).getKind());
+		assertFalse(segments.get(0).isPreBend());
+		assertEquals(SegmentKind.RELEASE, segments.get(1).getKind());
+		assertEquals(SegmentKind.HOLD, segments.get(2).getKind());
+	}
+
+	@Test
+	public void testPathDoesNotExtendPastGivenEnd() {
+		TGBendPath.Geometry shortBox = geometry();
+		shortBox.xEnd = 148f;
+		List<Segment> segments = TGBendPath.build(bend(0, 0, 12, 4).getPoints(), shortBox);
+
+		assertEquals(1, segments.size());
+		assertEquals(148f, segments.get(0).getTo().getX(), EPS);
+	}
+
+	@Test
+	public void testSpanBendToNext() {
+		assertFalse(TGNoteImpl.spanBendToNext(null));
+
+		TGNote landing = this.factory.newNote();
+		assertTrue(TGNoteImpl.spanBendToNext(landing));
+
+		TGNote independentBend = this.factory.newNote();
+		independentBend.getEffect().setBend(bend(0, 4, 12, 0));
+		assertFalse(TGNoteImpl.spanBendToNext(independentBend));
+
+		TGNote tiedBend = this.factory.newNote();
+		tiedBend.setTiedNote(true);
+		tiedBend.getEffect().setBend(bend(0, 4, 12, 0));
+		assertTrue(TGNoteImpl.spanBendToNext(tiedBend));
+
+		TGNote tiedWithoutBend = this.factory.newNote();
+		tiedWithoutBend.setTiedNote(true);
+		assertTrue(TGNoteImpl.spanBendToNext(tiedWithoutBend));
+	}
+
+	@Test
+	public void testBendReleaseMappedAcrossTiedChainWidth() {
+		TGBendPath.Geometry wide = geometry();
+		wide.xStart = 100f;
+		wide.xEnd = 500f;
+		List<Segment> segments = TGBendPath.build(bend(0, 0, 6, 4, 12, 0).getPoints(), wide);
+
+		assertEquals(2, segments.size());
+		assertEquals(SegmentKind.BEND_UP, segments.get(0).getKind());
+		assertEquals(SegmentKind.RELEASE, segments.get(1).getKind());
+		assertEquals(300f, segments.get(0).getTo().getX(), EPS);
+		assertEquals(500f, segments.get(1).getTo().getX(), EPS);
+	}
+
+	@Test
+	public void testSeriesOfBendReleasesSpansFullWidth() {
+		TGBendPath.Geometry wide = geometry();
+		wide.xStart = 0f;
+		wide.xEnd = 800f;
+		List<Segment> segments = TGBendPath.build(
+			bend(0, 0, 1, 2, 3, 0, 5, 2, 6, 0, 7, 2, 9, 0, 10, 2, 12, 0).getPoints(), wide);
+
+		assertEquals(8, segments.size());
+		assertEquals(800f / 12f, segments.get(0).getTo().getX(), EPS);
+		assertEquals(800f, segments.get(7).getTo().getX(), EPS);
+		int ups = 0;
+		int downs = 0;
+		for (Segment segment : segments) {
+			if (segment.getKind() == SegmentKind.BEND_UP) {
+				ups++;
+			} else if (segment.getKind() == SegmentKind.RELEASE) {
+				downs++;
+			}
+		}
+		assertEquals(4, ups);
+		assertEquals(4, downs);
 	}
 }

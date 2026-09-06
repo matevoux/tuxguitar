@@ -633,6 +633,8 @@ public class TGNoteImpl extends TGNote {
 		}
 		if(effect.isBend()){
 			paintBend(layout, painter, fromX+spacing, fromY, margin, effect.getBend());
+		}else if(isTiedNote()){
+			paintBendContinuation(layout, painter, fromX+spacing, fromY);
 		}else if(effect.isTremoloBar()){
 			paintTremoloBar(layout, painter, (x + margin.getRight()), y);
 		}else if(effect.isSlide() || effect.isHammer()){
@@ -657,7 +659,6 @@ public class TGNoteImpl extends TGNote {
 	}
 
 	private void paintBend(TGLayout layout,UIPainter painter,float fromX,float fromY, UIInset margin, TGEffectBend bend){
-		// fromX, fromY: top-left corner of drawing zone in current measure
 		TGSpacing ts = getMeasureImpl().getTs();
 		if (ts == null || painter == null) {
 			return;
@@ -665,70 +666,281 @@ public class TGNoteImpl extends TGNote {
 
 		float scale = layout.getScale();
 		float noteX = fromX + getPosX();
+		BendSpan span = resolveBendSpan(layout, this);
+		float xEnd = paintX(layout, noteX, span.endNote, span.endAtNoteCenter, scale);
+		boolean wrap = span.lastInChain != null && !sameLayoutLine(this, span.lastInChain);
+		float clipLeft = Float.NEGATIVE_INFINITY;
+		float clipRight = Float.POSITIVE_INFINITY;
+		if (wrap) {
+			xEnd = noteX + chainWidth(layout, this, span.lastInChain);
+			clipRight = measureRightPaintX(layout, noteX);
+		}
 
+		TGBendPath.Geometry geometry = bendGeometry(fromY, ts, scale, noteX, xEnd);
+		List<TGBendPath.Segment> segments = TGBendPath.build(bend.getPoints(), geometry, !isTiedNote());
+		paintBendSegments(layout, painter, geometry, segments, multipleBendConflicts(), scale, clipLeft, clipRight);
+	}
+
+	private void paintBendContinuation(TGLayout layout, UIPainter painter, float fromX, float fromY) {
+		TGSpacing ts = getMeasureImpl().getTs();
+		if (ts == null || painter == null || !isTiedNote() || getEffect().isBend()) {
+			return;
+		}
+		TGNoteImpl origin = bendOrigin(layout);
+		if (origin == null || !origin.getEffect().isBend() || sameLayoutLine(origin, this)) {
+			return;
+		}
+
+		float scale = layout.getScale();
+		float noteX = fromX + getPosX();
+		BendSpan span = resolveBendSpan(layout, origin);
+		float widthBefore = chainWidth(layout, origin, this) - Math.max(0f, getVoiceImpl().getWidth());
+		float xStart = noteX - widthBefore;
+		float xEnd = xStart + chainWidth(layout, origin, span.lastInChain);
+		TGBendPath.Geometry geometry = bendGeometry(fromY, ts, scale, xStart, xEnd);
+		List<TGBendPath.Segment> segments = TGBendPath.build(origin.getEffect().getBend().getPoints(), geometry, false);
+		float clipLeft = measureLeftPaintX(layout, noteX);
+		float clipRight = measureRightPaintX(layout, noteX);
+		paintBendSegments(layout, painter, geometry, segments, origin.multipleBendConflicts(), scale, clipLeft, clipRight);
+	}
+
+	private TGBendPath.Geometry bendGeometry(float fromY, TGSpacing ts, float scale, float xStart, float xEnd) {
 		TGBendPath.Geometry geometry = new TGBendPath.Geometry();
-		geometry.xStart = noteX;
-		geometry.xEnd = bendEndX(layout, fromX, noteX, scale);
+		geometry.xStart = xStart;
+		geometry.xEnd = xEnd;
 		geometry.yLabel = fromY + ts.getPosition(TGTrackSpacing.POSITION_BEND);
 		geometry.yFull = geometry.yLabel + 8.0f * scale;
 		geometry.yOpen = fromY + getPaintPosition(TGTrackSpacing.POSITION_TABLATURE) + getTabPosY() - (2.0f * scale);
 		geometry.scale = scale;
+		return geometry;
+	}
 
-		List<TGBendPath.Segment> segments = TGBendPath.build(bend.getPoints(), geometry);
-		if (segments.isEmpty()) {
+	private void paintBendSegments(TGLayout layout, UIPainter painter, TGBendPath.Geometry geometry,
+			List<TGBendPath.Segment> segments, boolean hideLabels, float scale, float clipLeft, float clipRight) {
+		if (segments == null || segments.isEmpty()) {
 			return;
 		}
-
-		boolean hideLabels = multipleBendConflicts();
 		for (TGBendPath.Segment segment : segments) {
+			float fromX = segment.getFrom().getX();
+			float toX = segment.getTo().getX();
+			if (toX < clipLeft || fromX > clipRight) {
+				continue;
+			}
 			layout.setTabEffectStyle(painter);
 			painter.setLineWidth(layout.getLineWidth(1));
 			painter.initPath();
-			if (segment.isPreBend()) {
-				painter.moveTo(segment.getFrom().getX(), geometry.yOpen);
-				painter.lineTo(segment.getFrom().getX(), segment.getFrom().getY());
-				paintBendArrow(painter, segment.getFrom().getX(), segment.getFrom().getY(), scale, 0.0f, -1.0f);
+			if (segment.isPreBend() && inClip(fromX, clipLeft, clipRight)) {
+				painter.moveTo(fromX, geometry.yOpen);
+				painter.lineTo(fromX, segment.getFrom().getY());
+				paintBendArrow(painter, fromX, segment.getFrom().getY(), scale, 0.0f, -1.0f);
 			}
-			painter.moveTo(segment.getFrom().getX(), segment.getFrom().getY());
 			if (segment.isArc()) {
+				painter.moveTo(segment.getFrom().getX(), segment.getFrom().getY());
 				for (TGBendPath.Cubic cubic : segment.getCubics()) {
 					painter.cubicTo(cubic.getC1x(), cubic.getC1y(), cubic.getC2x(), cubic.getC2y(), cubic.getX(), cubic.getY());
 				}
 			} else {
-				painter.lineTo(segment.getTo().getX(), segment.getTo().getY());
+				float x0 = clamp(fromX, clipLeft, clipRight);
+				float x1 = clamp(toX, clipLeft, clipRight);
+				float y0 = segment.getFrom().getY();
+				float y1 = segment.getTo().getY();
+				if (toX != fromX) {
+					if (x0 != fromX) {
+						y0 = segment.getFrom().getY() + (segment.getTo().getY() - segment.getFrom().getY()) * (x0 - fromX) / (toX - fromX);
+					}
+					if (x1 != toX) {
+						y1 = segment.getFrom().getY() + (segment.getTo().getY() - segment.getFrom().getY()) * (x1 - fromX) / (toX - fromX);
+					}
+				}
+				painter.moveTo(x0, y0);
+				painter.lineTo(x1, y1);
 			}
-			if (segment.isArrowAtEnd()) {
-				paintBendArrow(painter, segment.getTo().getX(), segment.getTo().getY(), scale,
+			if (segment.isArrowAtEnd() && inClip(toX, clipLeft, clipRight)) {
+				paintBendArrow(painter, toX, segment.getTo().getY(), scale,
 					segment.getEndTangentX(), segment.getEndTangentY());
 			}
 			painter.closePath();
 			if (!hideLabels) {
-				if (segment.isPreBend()) {
-					paintBendAmplitude(layout, painter, segment.getFrom().getValue(), segment.getFrom().getX(), geometry);
+				if (segment.isPreBend() && inClip(fromX, clipLeft, clipRight)) {
+					paintBendAmplitude(layout, painter, segment.getFrom().getValue(), fromX, geometry);
 				}
-				if (segment.isLabelAtEnd()) {
-					paintBendAmplitude(layout, painter, segment.getTo().getValue(), segment.getTo().getX(), geometry);
+				if (segment.isLabelAtEnd() && inClip(toX, clipLeft, clipRight)) {
+					paintBendAmplitude(layout, painter, segment.getTo().getValue(), toX, geometry);
 				}
 			}
 		}
 	}
 
-	private float bendEndX(TGLayout layout, float fromX, float noteX, float scale) {
-		TGNoteImpl nextNote = (TGNoteImpl) layout.getSongManager().getMeasureManager().getNextNote(
-			getMeasureImpl(), getBeatImpl().getStart(), getVoice().getIndex(), getString());
-		if (nextNote != null) {
-			float fromXtab = fromX - getBeatImpl().getSpacing(layout);
-			float nextX = fromXtab + nextNote.getPosX() + nextNote.getBeatImpl().getSpacing(layout);
-			if (nextX > noteX + scale) {
-				return nextX;
-			}
+	/**
+	 * Whether this bend's envelope should run to {@code next} on the same string.
+	 * Rests and notes on other strings are skipped (treated as silences).
+	 * A new attack with its own bend is not a landing point.
+	 */
+	static boolean spanBendToNext(TGNote next) {
+		if (next == null) {
+			return false;
 		}
+		return next.isTiedNote() || !next.getEffect().isBend();
+	}
+
+	private static final class BendSpan {
+		private TGNoteImpl endNote;
+		private TGNoteImpl lastInChain;
+		private boolean endAtNoteCenter;
+	}
+
+	static BendSpan resolveBendSpan(TGLayout layout, TGNoteImpl origin) {
+		BendSpan span = new BendSpan();
+		span.endNote = origin;
+		span.lastInChain = origin;
+		span.endAtNoteCenter = false;
+		if (layout == null || origin == null) {
+			return span;
+		}
+		TGNoteImpl next = nextSameString(layout, origin);
+		if (next == null) {
+			return span;
+		}
+		if (next.getEffect().isBend()) {
+			if (next.isTiedNote()) {
+				span.endNote = next;
+				span.lastInChain = next;
+				span.endAtNoteCenter = true;
+			}
+			return span;
+		}
+		if (next.isTiedNote()) {
+			TGNoteImpl last = lastTiedWithoutBend(layout, next);
+			span.endNote = last;
+			span.lastInChain = last;
+			span.endAtNoteCenter = false;
+			return span;
+		}
+		span.endNote = next;
+		span.lastInChain = next;
+		span.endAtNoteCenter = true;
+		return span;
+	}
+
+	static TGNoteImpl lastTiedWithoutBend(TGLayout layout, TGNoteImpl start) {
+		TGNoteImpl last = start;
+		TGNoteImpl note = start;
+		int guard = 0;
+		while (note != null && note.isTiedNote() && !note.getEffect().isBend() && guard++ < 128) {
+			last = note;
+			note = nextSameString(layout, note);
+		}
+		return last;
+	}
+
+	private static TGNoteImpl nextSameString(TGLayout layout, TGNoteImpl note) {
+		return (TGNoteImpl) layout.getSongManager().getTrackManager().getNextSameStringNote(note);
+	}
+
+	private TGNoteImpl bendOrigin(TGLayout layout) {
+		TGNoteImpl current = this;
+		TGNoteImpl origin = null;
+		int guard = 0;
+		while (current != null && current.isTiedNote() && guard++ < 128) {
+			TGNote previous = layout.getSongManager().getTrackManager().getPreviousNoteForTie(current);
+			if (previous == null) {
+				break;
+			}
+			origin = (TGNoteImpl) previous;
+			if (previous.getEffect().isBend()) {
+				break;
+			}
+			current = origin;
+		}
+		return origin;
+	}
+
+	private float paintX(TGLayout layout, float originPaintX, TGNoteImpl target, boolean center, float scale) {
+		if (target == null || target == this) {
+			return durationEndPaintX(originPaintX, scale);
+		}
+		float x = originPaintX + (layoutNoteX(layout, target) - layoutNoteX(layout, this));
+		if (!center) {
+			float width = target.getVoiceImpl().getWidth() - (2.0f * scale);
+			if (width < 0f) {
+				width = 0f;
+			}
+			x += width;
+		}
+		if (x < originPaintX + scale) {
+			return durationEndPaintX(originPaintX, scale);
+		}
+		return x;
+	}
+
+	private float durationEndPaintX(float noteX, float scale) {
 		float span = getVoiceImpl().getWidth() - (2.0f * scale);
-		float minWidth = TGBendPath.minimumWidth(scale);
-		if (span < minWidth) {
-			span = minWidth;
+		if (span < 0f) {
+			span = 0f;
 		}
 		return noteX + span;
+	}
+
+	private static float chainWidth(TGLayout layout, TGNoteImpl from, TGNoteImpl toInclusive) {
+		if (from == null) {
+			return 0f;
+		}
+		float width = 0f;
+		TGNoteImpl note = from;
+		int guard = 0;
+		while (note != null && guard++ < 128) {
+			width += Math.max(0f, note.getVoiceImpl().getWidth());
+			if (note == toInclusive) {
+				break;
+			}
+			TGNoteImpl next = nextSameString(layout, note);
+			if (next == null) {
+				break;
+			}
+			note = next;
+		}
+		return width;
+	}
+
+	private static float layoutNoteX(TGLayout layout, TGNoteImpl note) {
+		TGMeasureImpl measure = note.getMeasureImpl();
+		return measure.getPosX() + measure.getHeaderImpl().getLeftSpacing(layout)
+			+ note.getPosX() + note.getBeatImpl().getSpacing(layout);
+	}
+
+	private float measureRightPaintX(TGLayout layout, float noteX) {
+		TGMeasureImpl measure = getMeasureImpl();
+		float absNote = layoutNoteX(layout, this);
+		float absRight = measure.getPosX() + measure.getWidth(layout) + measure.getSpacing();
+		return noteX + (absRight - absNote);
+	}
+
+	private float measureLeftPaintX(TGLayout layout, float noteX) {
+		TGMeasureImpl measure = getMeasureImpl();
+		float absNote = layoutNoteX(layout, this);
+		float absLeft = measure.getPosX();
+		return noteX + (absLeft - absNote);
+	}
+
+	private static boolean sameLayoutLine(TGNoteImpl a, TGNoteImpl b) {
+		if (a == null || b == null) {
+			return true;
+		}
+		return Math.abs(a.getMeasureImpl().getPosY() - b.getMeasureImpl().getPosY()) < 0.5f;
+	}
+
+	private static boolean inClip(float x, float clipLeft, float clipRight) {
+		return x >= clipLeft && x <= clipRight;
+	}
+
+	private static float clamp(float value, float min, float max) {
+		if (value < min) {
+			return min;
+		}
+		if (value > max) {
+			return max;
+		}
+		return value;
 	}
 
 	private void paintBendArrow(UIPainter painter, float x, float y, float scale, float tangentX, float tangentY) {

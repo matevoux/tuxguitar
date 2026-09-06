@@ -255,6 +255,10 @@ public final class TGBendPath {
 	}
 
 	public static List<Segment> build(List<BendPoint> points, Geometry geometry) {
+		return build(points, geometry, true);
+	}
+
+	public static List<Segment> build(List<BendPoint> points, Geometry geometry, boolean allowPreBend) {
 		if (points == null || points.isEmpty() || geometry == null) {
 			return Collections.emptyList();
 		}
@@ -269,9 +273,8 @@ public final class TGBendPath {
 		}
 
 		float usableWidth = geometry.xEnd - geometry.xStart;
-		float minWidth = minimumWidth(geometry.scale);
-		if (usableWidth < minWidth) {
-			usableWidth = minWidth;
+		if (usableWidth < 0f) {
+			usableWidth = 0f;
 		}
 
 		List<Vertex> vertices = new ArrayList<Vertex>();
@@ -283,7 +286,7 @@ public final class TGBendPath {
 				point[1]));
 		}
 
-		boolean preBend = vertices.get(0).getValue() > 0;
+		boolean preBend = allowPreBend && vertices.get(0).getValue() > 0;
 		List<Segment> segments = new ArrayList<Segment>();
 		for (int i = 0; i < vertices.size() - 1; i++) {
 			Vertex from = vertices.get(i);
